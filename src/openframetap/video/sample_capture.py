@@ -15,7 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 from openframetap.network.interfaces import is_rfc1918
 from openframetap.network.secrets import require_private_directory
 from openframetap.video.session import VideoSession
-from openframetap.video.stream_probe import parse_ffprobe
+from openframetap.video.stream_probe import parse_ffprobe, redact_probe_metadata
 
 
 class SelfTestError(RuntimeError):
@@ -161,7 +161,10 @@ def run_rtmp_selftest(
         except json.JSONDecodeError as exc:
             raise SelfTestError("ffprobe returned invalid JSON") from exc
         probe_raw_path.write_text(json.dumps(probe_payload, indent=2) + "\n", encoding="utf-8")
-        metadata = parse_ffprobe(probe_payload)
+        metadata = redact_probe_metadata(
+            parse_ffprobe(probe_payload),
+            {url: sanitized_url, urlsplit(url).path.split("/")[-1]: "<redacted>"},
+        )
         if metadata["video"] is None:
             raise SelfTestError("ffprobe did not detect a video stream")
         session.publisher_connected = True

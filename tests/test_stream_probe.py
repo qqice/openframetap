@@ -1,4 +1,6 @@
-from openframetap.video.stream_probe import parse_ffprobe
+import json
+
+from openframetap.video.stream_probe import parse_ffprobe, redact_probe_metadata
 
 
 def test_h264_metadata_with_audio() -> None:
@@ -49,3 +51,17 @@ def test_hevc_metadata_and_no_audio() -> None:
     assert parsed["video"]["codec"] == "hevc"
     assert parsed["audio"] is None
     assert parsed["unknown_streams"] == []
+
+
+def test_nested_probe_metadata_redacts_stream_key() -> None:
+    key = "sensitive-stream-key"
+    value = {
+        "format": {
+            "raw": {"filename": f"rtmp://192.168.1.229:1935/live/{key}"}
+        },
+        "nested": [f"prefix-{key}-suffix"],
+    }
+    redacted = redact_probe_metadata(value, {key: "<redacted>"})
+    rendered = json.dumps(redacted)
+    assert key not in rendered
+    assert rendered.count("<redacted>") == 2

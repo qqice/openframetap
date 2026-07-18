@@ -67,3 +67,18 @@ def parse_ffprobe(payload: dict[str, Any]) -> dict[str, Any]:
         ],
     }
 
+
+def redact_probe_metadata(value: Any, replacements: dict[str, str]) -> Any:
+    """Recursively redact URLs, keys, SSIDs, or passwords before serialization."""
+
+    if isinstance(value, dict):
+        return {key: redact_probe_metadata(item, replacements) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_probe_metadata(item, replacements) for item in value]
+    if isinstance(value, str):
+        rendered = value
+        for sensitive, replacement in replacements.items():
+            if sensitive:
+                rendered = rendered.replace(sensitive, replacement)
+        return rendered
+    return value
