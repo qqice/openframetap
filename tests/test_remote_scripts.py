@@ -252,6 +252,24 @@ def test_approved_prepare_wrapper_requires_real_terminal_before_ssh() -> None:
     assert "Exit status: 37" not in result.stdout
 
 
+def test_approved_wifi_wrapper_requires_real_terminal_before_ssh() -> None:
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "pocket3-rtmp-send-approved-wifi"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert "requires the device owner at a real terminal" in result.stderr
+    assert "Exit status: 37" not in result.stdout
+
+
 def test_wifi_secret_wrapper_requires_real_terminal_before_ssh() -> None:
     env = os.environ.copy()
     env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
@@ -293,7 +311,16 @@ def test_wifi_proposal_wrapper_propagates_deploy_failure(tmp_path: Path) -> None
     assert "exit status: 37" in completed.stdout
 
 
-def test_rtmp_proposal_capture_failure_cleans_btmon(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("operation", "artifact_prefix"),
+    (
+        ("rtmp-proposal", "private/pocket3-rtmp-prepare-"),
+        ("rtmp-wifi-proposal", "private/pocket3-rtmp-wifi-"),
+    ),
+)
+def test_rtmp_proposal_capture_failure_cleans_btmon(
+    tmp_path: Path, operation: str, artifact_prefix: str
+) -> None:
     start_file = tmp_path / "started"
     stop_file = tmp_path / "stopped"
     proposal = tmp_path / "proposal.json"
@@ -312,7 +339,7 @@ def test_rtmp_proposal_capture_failure_cleans_btmon(tmp_path: Path) -> None:
         [
             bash_path(),
             "scripts/capture-pocket3.sh",
-            "rtmp-proposal",
+            operation,
             "00:11:22:33:44:55",
             "1",
             shell_path(proposal),
@@ -326,7 +353,7 @@ def test_rtmp_proposal_capture_failure_cleans_btmon(tmp_path: Path) -> None:
         timeout=15,
     )
     assert result.returncode == 31
-    assert "ARTIFACT_DIR=private/pocket3-rtmp-prepare-" in result.stdout
+    assert f"ARTIFACT_DIR={artifact_prefix}" in result.stdout
     assert start_file.exists()
     assert stop_file.read_text(encoding="utf-8") == "stopped"
 

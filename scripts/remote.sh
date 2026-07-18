@@ -15,6 +15,8 @@ LOCAL_FFMPEG_BIN="${OPENFRAMETAP_LOCAL_FFMPEG_BIN:-/c/ffmpeg/bin/ffmpeg.exe}"
 LOCAL_FFPROBE_BIN="${OPENFRAMETAP_LOCAL_FFPROBE_BIN:-/c/ffmpeg/bin/ffprobe.exe}"
 APPROVED_PREPARE_SHA256="e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6"
 APPROVED_PREPARE_DIR="$ROOT_DIR/artifacts/private/proposals/prepare-20260718T163611Z"
+APPROVED_WIFI_SHA256="8751117a3022d1a0057a4d6ea1ef38505314d1d75995fd4d46fc8d85e25ed72e"
+APPROVED_WIFI_DIR="$ROOT_DIR/artifacts/private/proposals/wifi-20260718T173350Z"
 RTMP_WORKFLOW_STATE="${OPENFRAMETAP_RTMP_WORKFLOW_STATE:-$ROOT_DIR/artifacts/private/pocket3-rtmp-workflow.json}"
 PREPARE_RESULT="${OPENFRAMETAP_PREPARE_RESULT:-$ROOT_DIR/artifacts/sanitized/pocket3-rtmp-prepare-20260719-010705/prepare-result.json}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
@@ -160,6 +162,7 @@ Usage:
   ./scripts/remote.sh rtmp-stop
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
+  ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
@@ -335,6 +338,68 @@ chmod 600 artifacts/private/approved-prepare/proposal-private.json artifacts/pri
     status=$?
     stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
     [[ -n "$stem" ]] || { echo '[openframetap] Missing private RTMP prepare artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
+    exit "$status"
+    ;;
+  pocket3-rtmp-send-approved-wifi)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: approved Wi-Fi send requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    proposal_json="$APPROVED_WIFI_DIR/proposal-private.json"
+    proposal_bin="$APPROVED_WIFI_DIR/proposal.bin"
+    [[ -f "$proposal_json" && -f "$proposal_bin" && -f "$RTMP_WORKFLOW_STATE" ]] || {
+      echo '[openframetap] Fixed approved Wi-Fi proposal or workflow state is missing.' >&2
+      exit 2
+    }
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"wifi_proposed"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: the approved Wi-Fi proposal is already consumed or no longer pending.' >&2
+      exit 4
+    }
+    actual_sha256="$(sha256sum "$proposal_bin" | awk '{print tolower($1)}')"
+    [[ "$actual_sha256" == "$APPROVED_WIFI_SHA256" ]] || {
+      echo '[openframetap] Approved Wi-Fi proposal SHA-256 mismatch.' >&2
+      exit 5
+    }
+    grep -Fq "\"frame_sha256\": \"$APPROVED_WIFI_SHA256\"" "$proposal_json" || {
+      echo '[openframetap] Private Wi-Fi proposal JSON does not name the approved SHA-256.' >&2
+      exit 5
+    }
+    grep -Fq '"command": "wifi_connect"' "$proposal_json" || {
+      echo '[openframetap] Private proposal is not the approved wifi_connect command.' >&2
+      exit 5
+    }
+    printf '%s\n' '[openframetap] APPROVED SINGLE COMMAND: wifi_connect (07/47)'
+    printf '[openframetap] Fixed private frame SHA-256: %s\n' "$APPROVED_WIFI_SHA256"
+    printf '%s\n' '[openframetap] No RTMP configuration, 02/8E, start, stop, retry, or follow-up command is authorized.'
+    deploy || exit $?
+    run_remote rtmp-wifi-send-stage "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/approved-wifi
+chmod 700 artifacts/private artifacts/private/approved-wifi"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$proposal_json" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-wifi/proposal-private.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/pocket3-rtmp-workflow.json.new" || exit $?
+    run_remote rtmp-wifi-send-finalize "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/approved-wifi/proposal-private.json.new artifacts/private/approved-wifi/proposal-private.json
+mv artifacts/private/pocket3-rtmp-workflow.json.new artifacts/private/pocket3-rtmp-workflow.json
+chmod 600 artifacts/private/approved-wifi/proposal-private.json artifacts/private/pocket3-rtmp-workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    run_remote_interactive rtmp-wifi-send \
+      "cd $REMOTE_DIR && bash scripts/capture-pocket3.sh rtmp-wifi-proposal '$POCKET3_ADDRESS' 30 'artifacts/private/approved-wifi/proposal-private.json' 'artifacts/private/pocket3-rtmp-workflow.json'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ "$stem" == private/pocket3-rtmp-wifi-* ]] || {
+      echo '[openframetap] Missing private Wi-Fi send artifact marker' >&2
+      exit 3
+    }
     pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
     exit "$status"

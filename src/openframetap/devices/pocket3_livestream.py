@@ -153,6 +153,75 @@ def load_fixed_proposal(path: Path, *, expected_address: str) -> tuple[dict, byt
     return payload, raw
 
 
+def load_fixed_wifi_proposal(path: Path, *, expected_address: str) -> tuple[dict, bytes]:
+    """Load one sensitive Wi-Fi proposal without exposing its payload."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    required = {
+        "schema_version",
+        "stage",
+        "command",
+        "target_address",
+        "frame_hex",
+        "frame_sha256",
+        "evidence",
+        "secret_fingerprints",
+    }
+    if not required.issubset(payload):
+        raise PermissionError("Wi-Fi proposal schema is incomplete")
+    if (
+        payload.get("stage") != "wifi"
+        or payload.get("command") != "wifi_connect"
+        or payload.get("max_send_count") != 1
+        or payload.get("automatic_retry") is not False
+        or payload.get("automatic_follow_up") is not False
+        or payload.get("contains_sensitive_data") is not True
+    ):
+        raise PermissionError("Wi-Fi proposal single-send policy is invalid")
+    if payload["target_address"].upper() != expected_address.upper():
+        raise PermissionError("Wi-Fi proposal Pocket address does not match the selected target")
+    raw = bytes.fromhex(payload["frame_hex"])
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != payload["frame_sha256"].lower():
+        raise PermissionError("Wi-Fi proposal frame SHA-256 mismatch")
+    prepare_result_sha = (payload.get("evidence") or {}).get(
+        "prepare_result_sha256", ""
+    )
+    if len(prepare_result_sha) != 64 or any(
+        character not in "0123456789abcdef" for character in prepare_result_sha.lower()
+    ):
+        raise PermissionError("Wi-Fi proposal prepare evidence is missing")
+    command = LIVESTREAM_COMMANDS["wifi_connect"]
+    decoded = decode_duml_frame(raw)
+    validate_command_frame(command, decoded)
+    if not decoded.crc8_valid or not decoded.crc16_valid or decoded.raw != raw:
+        raise PermissionError("Wi-Fi proposal failed CRC or round-trip validation")
+    if (
+        decoded.sender,
+        decoded.receiver,
+        decoded.sequence,
+        decoded.flags,
+        decoded.cmd_set,
+        decoded.cmd_id,
+    ) != (0x02, 0x07, 0x8C19, 0x40, 0x07, 0x47):
+        raise PermissionError("Wi-Fi proposal wire fields are not the approved candidate")
+    ssid_length = decoded.payload[0]
+    psk_length_offset = 1 + ssid_length
+    psk_length = decoded.payload[psk_length_offset]
+    ssid = decoded.payload[1:psk_length_offset]
+    psk = decoded.payload[psk_length_offset + 1 :]
+    fingerprints = payload["secret_fingerprints"]
+    if (
+        len(ssid) != fingerprints.get("ssid_encoded_length")
+        or len(psk) != psk_length
+        or len(psk) != fingerprints.get("psk_length")
+        or hashlib.sha256(ssid).hexdigest() != fingerprints.get("ssid_sha256")
+        or hashlib.sha256(psk).hexdigest() != fingerprints.get("psk_sha256")
+    ):
+        raise PermissionError("Wi-Fi proposal secret fingerprints do not match its frame")
+    return payload, raw
+
+
 def write_wifi_proposal(
     *,
     address: str,

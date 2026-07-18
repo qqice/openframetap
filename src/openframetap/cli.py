@@ -537,6 +537,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "pocket3" and args.pocket3_command == "rtmp":
         from openframetap.devices.pocket3_livestream import (
             load_fixed_proposal,
+            load_fixed_wifi_proposal,
             write_prepare_proposal,
             write_wifi_proposal,
         )
@@ -695,19 +696,32 @@ def main(argv: list[str] | None = None) -> int:
                 print("REFUSED: send-approved requires the owner-only interactive wrapper and TTY.")
                 return 4
             require_private_directory(args.output_dir)
-            proposal, raw = load_fixed_proposal(
-                args.proposal, expected_address=args.address
-            )
+            proposal_header = json.loads(args.proposal.read_text(encoding="utf-8"))
+            if proposal_header.get("stage") == "wifi":
+                proposal, raw = load_fixed_wifi_proposal(
+                    args.proposal, expected_address=args.address
+                )
+                expected_phase = "wifi_proposed"
+                sent_phase = "wifi_sent"
+            elif proposal_header.get("stage") == "prepare":
+                proposal, raw = load_fixed_proposal(
+                    args.proposal, expected_address=args.address
+                )
+                expected_phase = "prepare_proposed"
+                sent_phase = "prepare_sent"
+            else:
+                print("REFUSED: proposal stage is not in the single-send allowlist")
+                return 4
             digest = proposal["frame_sha256"].lower()
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            if workflow.phase != expected_phase:
+                print(f"REFUSED: workflow is {workflow.phase}, expected {expected_phase}")
+                return 4
             typed = input(
                 f"Type the full SHA-256 for {proposal['command']} to send once, or Enter to stop: "
             ).strip().lower()
             if typed != digest:
                 print("REFUSED: confirmation mismatch; no BLE connection was attempted.")
-                return 4
-            workflow = Pocket3RtmpWorkflow.load(args.state_file)
-            if workflow.phase != "prepare_proposed":
-                print(f"REFUSED: workflow is {workflow.phase}, expected prepare_proposed")
                 return 4
             payload, ok = asyncio.run(
                 manual_send_pocket3_frame(
@@ -721,7 +735,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             if ok and payload.get("writes_attempted") == 1:
                 workflow.transition(
-                    "prepare_sent", evidence={"proposal_sha256": digest, "send_count": 1}
+                    sent_phase,
+                    evidence={
+                        "proposal_sha256": digest,
+                        "send_count": 1,
+                        "automatic_follow_up_frames": 0,
+                    },
                 )
                 workflow.save(args.state_file)
             print(

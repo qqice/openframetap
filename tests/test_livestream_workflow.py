@@ -9,6 +9,7 @@ import pytest
 
 from openframetap.devices.pocket3_livestream import (
     load_fixed_proposal,
+    load_fixed_wifi_proposal,
     write_prepare_proposal,
     write_wifi_proposal,
 )
@@ -157,6 +158,27 @@ def test_wifi_proposal_is_private_and_sanitized_output_has_no_payload(
     assert "frame_hex" not in sanitized_text
     assert payload["max_send_count"] == 1
     assert payload["automatic_retry"] is False
+    loaded, loaded_raw = load_fixed_wifi_proposal(
+        Path(payload["private_proposal"]), expected_address=ADDRESS
+    )
+    assert loaded["frame_sha256"] == payload["frame_sha256"]
+    assert loaded_raw == private_frame
+
+
+def test_wifi_proposal_loader_rejects_tampered_fingerprint(tmp_path: Path) -> None:
+    payload = write_wifi_proposal(
+        address=ADDRESS,
+        secrets=WifiProvisioningSecrets("Fixture5G", "fixture-password"),
+        private_root=tmp_path / "artifacts" / "private" / "proposals",
+        sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
+        prepare_result_sha256="3" * 64,
+    )
+    path = Path(payload["private_proposal"])
+    private = json.loads(path.read_text(encoding="utf-8"))
+    private["secret_fingerprints"]["psk_sha256"] = "0" * 64
+    path.write_text(json.dumps(private), encoding="utf-8")
+    with pytest.raises(PermissionError, match="fingerprints"):
+        load_fixed_wifi_proposal(path, expected_address=ADDRESS)
 
 
 def test_wifi_proposal_cli_is_offline_and_stdout_is_sanitized(
