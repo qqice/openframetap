@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from openframetap.devices.pocket3 import POCKET3_PROFILE
-from openframetap.devices.pocket3_livestream import write_prepare_recovery_proposal
+from openframetap.devices.pocket3_livestream import (
+    write_prepare_recovery_proposal,
+    write_wifi_proposal,
+)
+from openframetap.network.secrets import WifiProvisioningSecrets
 from openframetap.protocol.commands import (
     CommandRejected,
     SendAuthorization,
@@ -29,6 +33,18 @@ def _proposal(tmp_path: Path) -> Path:
         private_root=tmp_path / "artifacts" / "private" / "proposals",
         sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
         wifi_result_sha256="4" * 64,
+    )
+    return Path(payload["private_proposal"])
+
+
+def _wifi_retry_proposal(tmp_path: Path) -> Path:
+    payload = write_wifi_proposal(
+        address=ADDRESS,
+        secrets=WifiProvisioningSecrets("Fixture5G", "fixture-password"),
+        private_root=tmp_path / "artifacts" / "private" / "wifi-retry-proposals",
+        sanitized_root=tmp_path / "artifacts" / "sanitized" / "wifi-retry-proposals",
+        prepare_result_sha256="5" * 64,
+        sequence=0x8C1A,
     )
     return Path(payload["private_proposal"])
 
@@ -55,7 +71,12 @@ STAGE2_RESPONSE = _frame(
 )
 
 
-def _transport_class(*, stage1_response: bytes = STAGE1_ACK, stage2_response: bytes = STAGE2_RESPONSE):
+def _transport_class(
+    *,
+    stage1_response: bytes = STAGE1_ACK,
+    stage2_response: bytes = STAGE2_RESPONSE,
+    wifi_response: bytes | None = None,
+):
     class FakeTransport:
         instances = []
 
@@ -92,6 +113,8 @@ def _transport_class(*, stage1_response: bytes = STAGE1_ACK, stage2_response: by
                 await self._notify(stage1_response, 2)
             elif command.name == "prepare_stream_transport":
                 await self._notify(stage2_response, 3)
+            elif command.name == "wifi_connect" and wifi_response is not None:
+                await self._notify(wifi_response, 4)
 
         async def disconnect(self) -> None:
             self.is_connected = False
@@ -158,6 +181,48 @@ def test_unexpected_stage1_response_stops_before_stage2_is_proposed(tmp_path) ->
     ]
     assert summary["recovery_result"] == "failed"
     assert "unexpected matching-sequence" in summary["error"]
+
+
+def test_wifi_retry_is_third_frame_after_both_exact_prepare_responses(tmp_path) -> None:
+    wifi_ack = encode_duml_frame(
+        sender=0x07,
+        receiver=0x02,
+        sequence=0x8C1A,
+        flags=0xC0,
+        cmd_set=0x07,
+        cmd_id=0x47,
+        payload=b"\x00\x00",
+    )
+    transport_class = _transport_class(wifi_response=wifi_ack)
+    proposed = []
+    summary, ok = asyncio.run(
+        run_prepare_recovery_session(
+            ADDRESS,
+            proposal_path=_proposal(tmp_path),
+            wifi_proposal_path=_wifi_retry_proposal(tmp_path),
+            output_dir=tmp_path / "artifacts" / "private" / "capture",
+            confirmation_callback=lambda candidate: proposed.append(candidate) or True,
+            response_timeout=0.2,
+            passive_seconds=0.2,
+            transport_factory=transport_class,
+        )
+    )
+    assert ok
+    assert [command.name for _raw, command, _authorization in transport_class.instances[0].sent] == [
+        "prepare_to_live_stream",
+        "prepare_stream_transport",
+        "wifi_connect",
+    ]
+    assert [candidate["stage"] for candidate in proposed] == [
+        "prepare_reentry",
+        "prepare_stream_stage2",
+        "wifi_retry_after_validated_prepare",
+    ]
+    assert summary["writes_attempted"] == 3
+    assert summary["wifi_frames_sent"] == 1
+    assert summary["rtmp_configuration_frames_sent"] == 0
+    assert summary["recovery_result"] == "wifi_retry_response_observed"
+    assert summary["wifi_response"]["payload_hex"] == "0000"
 
 
 def test_declined_stage2_stops_after_stage1(tmp_path) -> None:

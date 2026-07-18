@@ -119,6 +119,8 @@ async def run_prepare_recovery_session(
     proposal_path: Path,
     output_dir: Path,
     confirmation_callback: ConfirmationCallback,
+    wifi_proposal_path: Path | None = None,
+    wifi_sequence: int = 0x8C1A,
     response_timeout: float = 15.0,
     passive_seconds: float = 10.0,
     transport_factory: Callable = BluezBleTransport,
@@ -128,6 +130,22 @@ async def run_prepare_recovery_session(
     _, stages = load_prepare_recovery_proposal(
         proposal_path, expected_address=address
     )
+    wifi_stage: tuple[dict, bytes] | None = None
+    if wifi_proposal_path is not None:
+        from openframetap.devices.pocket3_livestream import load_fixed_wifi_proposal
+
+        wifi_proposal, wifi_raw = load_fixed_wifi_proposal(
+            wifi_proposal_path,
+            expected_address=address,
+            expected_sequence=wifi_sequence,
+        )
+        wifi_stage = (
+            {
+                **wifi_proposal,
+                "stage": "wifi_retry_after_validated_prepare",
+            },
+            wifi_raw,
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     candidates_path = output_dir / "recovery-candidates.jsonl"
     recovery_events_path = output_dir / "recovery-events.jsonl"
@@ -136,7 +154,11 @@ async def run_prepare_recovery_session(
     recorder = TelemetryRecorder(
         output_dir,
         address=address,
-        operation="owner-confirmed-prepare-recovery-same-connection",
+        operation=(
+            "owner-confirmed-prepare-and-wifi-recovery-same-connection"
+            if wifi_stage is not None
+            else "owner-confirmed-prepare-recovery-same-connection"
+        ),
     )
     reassembler = DumlStreamReassembler()
     frames: asyncio.Queue[DumlFrame] = asyncio.Queue()
@@ -163,10 +185,13 @@ async def run_prepare_recovery_session(
     connected_at_end = False
     stage1_response: dict | None = None
     stage2_response: dict | None = None
+    wifi_response: dict | None = None
     started = time.monotonic()
 
-    async def propose_and_send(index: int, *, allow_denied_command: bool) -> bool:
-        stage, raw = stages[index]
+    async def propose_and_send_stage(
+        stage_and_raw: tuple[dict, bytes], *, allow_denied_command: bool
+    ) -> bool:
+        stage, raw = stage_and_raw
         command = get_command_definition(stage["command"])
         digest = hashlib.sha256(raw).hexdigest()
         authorization = SendAuthorization.explicit_single_frame(
@@ -213,6 +238,11 @@ async def run_prepare_recovery_session(
         )
         return True
 
+    async def propose_and_send(index: int, *, allow_denied_command: bool) -> bool:
+        return await propose_and_send_stage(
+            stages[index], allow_denied_command=allow_denied_command
+        )
+
     async def wait_exact_stage1() -> DumlFrame:
         deadline = time.monotonic() + response_timeout
         while True:
@@ -253,6 +283,32 @@ async def run_prepare_recovery_session(
                 raise RuntimeError("unexpected matching-sequence prepare stage2 response")
             return frame
 
+    async def observe_wifi_response(seconds: float) -> DumlFrame | None:
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                frame = await asyncio.wait_for(frames.get(), timeout=remaining)
+            except TimeoutError:
+                return None
+            if (frame.sequence, frame.cmd_set, frame.cmd_id) != (
+                wifi_sequence,
+                0x07,
+                0x47,
+            ):
+                continue
+            if not (
+                frame.sender == 0x07
+                and frame.receiver == 0x02
+                and frame.flags == 0xC0
+                and frame.crc8_valid
+                and frame.crc16_valid
+            ):
+                raise RuntimeError("unexpected matching-sequence Wi-Fi retry response")
+            return frame
+
     try:
         await transport.connect()
         await transport.subscribe(notification_handler)
@@ -270,9 +326,26 @@ async def run_prepare_recovery_session(
                 response2 = await wait_exact_stage2()
                 stage2_response = response2.to_dict()
                 recovery_event("stage2_exact_response", raw_hex=response2.raw.hex())
-                result = "prepare_stage2_response_validated"
-                if passive_seconds:
-                    await asyncio.sleep(passive_seconds)
+                if wifi_stage is None:
+                    result = "prepare_stage2_response_validated"
+                    if passive_seconds:
+                        await asyncio.sleep(passive_seconds)
+                elif not await propose_and_send_stage(
+                    wifi_stage, allow_denied_command=False
+                ):
+                    result = "cancelled_before_wifi_retry"
+                else:
+                    result = "wifi_retry_written_after_validated_prepare"
+                    recovery_event("wifi_retry_written_after_validated_prepare")
+                    response3 = await observe_wifi_response(passive_seconds)
+                    if response3 is not None:
+                        wifi_response = response3.to_dict()
+                        recovery_event(
+                            "wifi_matching_response",
+                            raw_hex=response3.raw.hex(),
+                            payload_hex=response3.payload.hex(),
+                        )
+                        result = "wifi_retry_response_observed"
         connected_at_end = transport.is_connected
     except (KeyboardInterrupt, asyncio.CancelledError):
         error = "cancelled"
@@ -308,12 +381,24 @@ async def run_prepare_recovery_session(
                 "automatic_follow_up_frames": 0,
                 "unapproved_follow_up_frames": 0,
                 "preapproved_conditional_stage2": True,
-                "wifi_frames_sent": 0,
+                "preapproved_conditional_frame_count": (
+                    2 if wifi_stage is not None else 1
+                ),
+                "wifi_frames_sent": sum(
+                    item["command"] == "wifi_connect" for item in sent
+                ),
                 "rtmp_configuration_frames_sent": 0,
                 "bluez_pairing_requested": False,
                 "recovery_result": result,
                 "stage1_response": stage1_response,
                 "stage2_response": stage2_response,
+                "wifi_response": wifi_response,
             },
         )
-    return summary, error is None and result == "prepare_stage2_response_validated"
+    successful_results = {"prepare_stage2_response_validated"}
+    if wifi_stage is not None:
+        successful_results = {
+            "wifi_retry_written_after_validated_prepare",
+            "wifi_retry_response_observed",
+        }
+    return summary, error is None and result in successful_results

@@ -154,7 +154,9 @@ def load_fixed_proposal(path: Path, *, expected_address: str) -> tuple[dict, byt
     return payload, raw
 
 
-def load_fixed_wifi_proposal(path: Path, *, expected_address: str) -> tuple[dict, bytes]:
+def load_fixed_wifi_proposal(
+    path: Path, *, expected_address: str, expected_sequence: int = 0x8C19
+) -> tuple[dict, bytes]:
     """Load one sensitive Wi-Fi proposal without exposing its payload."""
 
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -204,7 +206,7 @@ def load_fixed_wifi_proposal(path: Path, *, expected_address: str) -> tuple[dict
         decoded.flags,
         decoded.cmd_set,
         decoded.cmd_id,
-    ) != (0x02, 0x07, 0x8C19, 0x40, 0x07, 0x47):
+    ) != (0x02, 0x07, expected_sequence, 0x40, 0x07, 0x47):
         raise PermissionError("Wi-Fi proposal wire fields are not the approved candidate")
     ssid_length = decoded.payload[0]
     psk_length_offset = 1 + ssid_length
