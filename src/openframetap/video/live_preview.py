@@ -14,7 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from openframetap.display.session import discover_active_wayland_session
 from openframetap.network.secrets import require_private_directory
-from openframetap.video.latency import StartupTimeline, pipeline_latency_statement
+from openframetap.video.latency import StartupTimeline, parse_latency_tracer
 from openframetap.video.metrics import ProcessMetrics, summarize_metrics
 from openframetap.video.pipelines import PipelineSpec
 from openframetap.video.player_process import ProcessRegistry
@@ -72,7 +72,10 @@ def run_preview(
     sanitized_dir.mkdir(parents=True, exist_ok=True)
     session = discover_active_wayland_session()
     env = session.environment()
-    env["GST_DEBUG"] = os.environ.get("GST_DEBUG", "2,fpsdisplaysink:6")
+    env["GST_TRACERS"] = os.environ.get("GST_TRACERS", "latency(flags=pipeline)")
+    env["GST_DEBUG"] = os.environ.get(
+        "GST_DEBUG", "2,fpsdisplaysink:6,GST_TRACER:7"
+    )
     log_path = private_dir / "gst.log"
     metrics_path = private_dir / "metrics.jsonl"
     pipeline_path = private_dir / "pipeline.json"
@@ -147,13 +150,20 @@ def run_preview(
         "frames": frame_stats,
         "metrics": summarize_metrics(samples),
         "startup_timeline": timeline.to_dict(),
-        "latency": pipeline_latency_statement(),
+        "latency": parse_latency_tracer(log_text),
         "audio_output_enabled": False,
         "ble_connection_status": "not_required_for_media_pull",
         "cleanup": {
             "preview_registry_empty": "preview" not in registry.load(),
             "owned_pid_stopped": process.poll() is not None,
         },
+        "disconnects": {
+            "wayland": len(re.findall(r"wayland[^\n]*(?:disconnect|broken pipe)", log_text, re.IGNORECASE)),
+            "decoder_resets": len(re.findall(r"decoder[^\n]*reset", log_text, re.IGNORECASE)),
+            "pipeline_restarts": 0,
+            "client_reconnects": 0,
+        },
+        "late_frame_warnings": len(re.findall(r"Dropping frame due to QoS", log_text)),
     }
     if spec.source_kind in {"rtmp", "rtsp"}:
         try:

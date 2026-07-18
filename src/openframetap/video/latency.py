@@ -41,3 +41,24 @@ def pipeline_latency_statement() -> dict:
             "they are not glass-to-glass latency."
         ),
     }
+
+
+def parse_latency_tracer(text: str) -> dict:
+    import re
+
+    values = [
+        int(value)
+        for value in re.findall(r"latency[^\n]*time=\(guint64\)(\d+)", text)
+    ]
+    return {
+        "internal_latency_available": bool(values),
+        "sample_count": len(values),
+        "minimum_ms": min(values) / 1e6 if values else None,
+        "average_ms": sum(values) / len(values) / 1e6 if values else None,
+        "maximum_ms": max(values) / 1e6 if values else None,
+        "glass_to_glass_measured": False,
+        "statement": (
+            "GStreamer tracer time covers source-to-sink pipeline processing only; "
+            "it excludes camera exposure/encoding and is not glass-to-glass latency."
+        ),
+    }

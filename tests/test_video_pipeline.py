@@ -10,6 +10,7 @@ from openframetap.display.session import parse_loginctl_session
 from openframetap.video.decoder_probe import parse_gst_inspect
 from openframetap.video.metrics import read_temperature_c, summarize_metrics, MetricSample
 from openframetap.video.live_preview import parse_fps_messages
+from openframetap.video.latency import parse_latency_tracer
 from openframetap.video.pipelines import (
     PipelineProfile,
     live_pipeline,
@@ -142,3 +143,13 @@ def test_expected_flv_eos_warning_is_not_a_decode_error() -> None:
         line,
         re.IGNORECASE,
     )
+
+
+def test_latency_tracer_is_labeled_internal_not_glass_to_glass() -> None:
+    payload = parse_latency_tracer(
+        "latency, src-element-id=(string)src, time=(guint64)12000000;\n"
+        "latency, src-element-id=(string)src, time=(guint64)18000000;\n"
+    )
+    assert payload["internal_latency_available"]
+    assert payload["average_ms"] == 15.0
+    assert payload["glass_to_glass_measured"] is False

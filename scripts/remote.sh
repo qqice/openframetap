@@ -876,8 +876,13 @@ printf 'ARTIFACT_DIR=private/$stem\n'"
     ;;
   live-preview)
     seconds="${2:-120}"
+    profile="${OPENFRAMETAP_PREVIEW_PROFILE:-low-latency}"
     [[ $# -le 2 && "$seconds" =~ ^[1-9][0-9]*$ && "$seconds" -le 900 ]] || {
       echo 'live-preview seconds must be an integer from 1 to 900' >&2
+      exit 2
+    }
+    [[ "$profile" == "stable" || "$profile" == "low-latency" || "$profile" == "aggressive-low-latency" ]] || {
+      echo 'invalid OPENFRAMETAP_PREVIEW_PROFILE' >&2
       exit 2
     }
     run_remote live-preview-publisher-check "if ss -Htn state established sport = :1935 | grep -q .; then echo PUBLISHER_PRESENT=1; else echo PUBLISHER_PRESENT=0; fi"
@@ -898,7 +903,7 @@ chmod 700 artifacts/private/approved-live-preview artifacts/private/$stem" || ex
 cd $REMOTE_DIR
 mv artifacts/private/approved-live-preview/stream.json.new artifacts/private/approved-live-preview/stream.json
 chmod 600 artifacts/private/approved-live-preview/stream.json
-.venv/bin/python -m openframetap video live-preview --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --source auto --decoder auto --sink wayland --fullscreen --profile low-latency --duration '$seconds' --private-output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem'
+.venv/bin/python -m openframetap video live-preview --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --source auto --decoder auto --sink wayland --fullscreen --profile '$profile' --duration '$seconds' --private-output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem'
 printf 'ARTIFACT_DIR=private/$stem\n'"
     status=$?
     pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
