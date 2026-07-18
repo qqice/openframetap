@@ -612,6 +612,7 @@ def main(argv: list[str] | None = None) -> int:
         from openframetap.devices.pocket3_livestream import (
             load_fixed_proposal,
             load_fixed_stream_proposal,
+            load_fixed_start_transport_proposal,
             load_fixed_wifi_proposal,
             write_prepare_recovery_proposal,
             write_prepare_proposal,
@@ -912,7 +913,12 @@ def main(argv: list[str] | None = None) -> int:
             print("PROPOSAL ONLY: no BLE connection or FFF5 write was attempted.")
             return 0
         if args.rtmp_command == "send-approved":
-            if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
+            autonomous_reversible = (
+                os.environ.get("OPENFRAMETAP_AUTONOMOUS_REVERSIBLE") == "1"
+            )
+            if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or (
+                not sys.stdin.isatty() and not autonomous_reversible
+            ):
                 print("REFUSED: send-approved requires the owner-only interactive wrapper and TTY.")
                 return 4
             require_private_directory(args.output_dir)
@@ -935,6 +941,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 expected_phase = "stream_proposed"
                 sent_phase = "stream_sent"
+            elif proposal_header.get("stage") == "stream-start":
+                proposal, raw = load_fixed_start_transport_proposal(
+                    args.proposal, expected_address=args.address
+                )
+                expected_phase = "stream_sent"
+                sent_phase = "waiting_for_rtmp"
             else:
                 print("REFUSED: proposal stage is not in the single-send allowlist")
                 return 4
@@ -943,7 +955,7 @@ def main(argv: list[str] | None = None) -> int:
             if workflow.phase != expected_phase:
                 print(f"REFUSED: workflow is {workflow.phase}, expected {expected_phase}")
                 return 4
-            if proposal_header.get("stage") == "stream":
+            if proposal_header.get("stage") in {"stream", "stream-start"}:
                 invoked = os.environ.get("OPENFRAMETAP_COMMAND_INVOCATION_APPROVAL") == "1"
                 fixed_digest = os.environ.get(
                     "OPENFRAMETAP_FIXED_PROPOSAL_SHA256", ""
@@ -971,6 +983,7 @@ def main(argv: list[str] | None = None) -> int:
                     confirmed_sha256=digest,
                     seconds=args.seconds,
                     output_dir=args.output_dir,
+                    allow_denied_command=proposal_header.get("stage") == "stream-start",
                 )
             )
             if ok and payload.get("writes_attempted") == 1:

@@ -16,6 +16,7 @@ from openframetap.protocol.livestream_commands import (
     build_configure_live_stream_frame,
     build_prepare_to_live_stream_frame,
     build_prepare_stream_stage2_frame,
+    build_start_live_stream_transport_frame,
     build_wifi_connect_frame,
 )
 
@@ -493,6 +494,113 @@ def load_fixed_stream_proposal(path: Path, *, expected_address: str) -> tuple[di
     stream_key = url.rsplit("/", 1)[-1]
     if hashlib.sha256(stream_key.encode()).hexdigest() != payload["stream_key_sha256"]:
         raise PermissionError("stream proposal key fingerprint mismatch")
+    return payload, raw
+
+
+def write_start_transport_proposal(
+    *,
+    address: str,
+    private_root: Path,
+    sanitized_root: Path,
+    configure_result_sha256: str,
+    sequence: int = 0xB4BB,
+) -> dict:
+    """Write the fixed reversible 02/8E start candidate; never send it."""
+
+    if len(configure_result_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in configure_result_sha256.lower()
+    ):
+        raise ValueError("configure result SHA-256 is invalid")
+    command = LIVESTREAM_COMMANDS["start_live_stream_transport"]
+    frame = build_start_live_stream_transport_frame(sequence=sequence)
+    decoded = decode_duml_frame(frame)
+    validate_command_frame(command, decoded)
+    if not (decoded.crc8_valid and decoded.crc16_valid) or decoded.raw != frame:
+        raise RuntimeError("offline start-transport proposal round-trip validation failed")
+    digest = hashlib.sha256(frame).hexdigest()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    private_dir = require_private_directory(private_root / f"stream-start-{stamp}")
+    sanitized_dir = (sanitized_root / f"stream-start-{stamp}").resolve()
+    if "sanitized" not in {part.lower() for part in sanitized_dir.parts}:
+        raise ValueError("sanitized start proposal must be under artifacts/sanitized")
+    sanitized_dir.mkdir(parents=True, exist_ok=True)
+    proposal = {
+        "schema_version": 1,
+        "stage": "stream-start",
+        "command": command.name,
+        "target_address": address,
+        "frame_hex": frame.hex(),
+        "frame_sha256": digest,
+        "max_send_count": 1,
+        "automatic_retry": False,
+        "automatic_follow_up": False,
+        "contains_sensitive_data": False,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "evidence": {"configure_result_sha256": configure_result_sha256.lower()},
+        "decoded": decoded.to_dict(),
+    }
+    private_json = private_dir / "proposal-private.json"
+    _write_private(
+        private_json,
+        (json.dumps(proposal, indent=2, ensure_ascii=False) + "\n").encode(),
+    )
+    _write_private(private_dir / "proposal.bin", frame)
+    sanitized = {
+        **proposal,
+        "target_address": None,
+        "target_address_masked": _mask_address(address),
+        "target_address_sha256": hashlib.sha256(address.upper().encode()).hexdigest(),
+        "locally_sent": False,
+        "reference_sources": list(command.reference_sources),
+        "confidence": command.confidence,
+        "risk": "requests start of the already configured RTMP transport",
+    }
+    sanitized.pop("target_address")
+    sanitized_json = sanitized_dir / "proposal.json"
+    sanitized_json.write_text(
+        json.dumps(sanitized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (sanitized_dir / "proposal.sha256").write_text(
+        f"{digest}  proposal-frame\n", encoding="ascii"
+    )
+    return {
+        **sanitized,
+        "private_proposal": str(private_json),
+        "sanitized_proposal": str(sanitized_json),
+    }
+
+
+def load_fixed_start_transport_proposal(
+    path: Path, *, expected_address: str
+) -> tuple[dict, bytes]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        payload.get("stage") != "stream-start"
+        or payload.get("command") != "start_live_stream_transport"
+        or payload.get("target_address", "").upper() != expected_address.upper()
+        or payload.get("max_send_count") != 1
+        or payload.get("automatic_retry") is not False
+        or payload.get("automatic_follow_up") is not False
+    ):
+        raise PermissionError("start-transport proposal policy or address is invalid")
+    raw = bytes.fromhex(payload.get("frame_hex", ""))
+    if hashlib.sha256(raw).hexdigest() != payload.get("frame_sha256", "").lower():
+        raise PermissionError("start-transport proposal SHA-256 mismatch")
+    evidence_sha = (payload.get("evidence") or {}).get("configure_result_sha256", "")
+    if len(evidence_sha) != 64:
+        raise PermissionError("start-transport configure evidence is invalid")
+    frame = decode_duml_frame(raw)
+    command = LIVESTREAM_COMMANDS["start_live_stream_transport"]
+    validate_command_frame(command, frame)
+    if (
+        (frame.sender, frame.receiver, frame.sequence, frame.flags)
+        != (0x02, 0x08, 0xB4BB, 0x40)
+        or (frame.cmd_set, frame.cmd_id, frame.payload)
+        != (0x02, 0x8E, bytes.fromhex("01011a000101"))
+        or not frame.crc8_valid
+        or not frame.crc16_valid
+    ):
+        raise PermissionError("start-transport proposal wire frame is invalid")
     return payload, raw
 
 

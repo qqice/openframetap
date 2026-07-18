@@ -200,3 +200,18 @@ def build_configure_live_stream_frame(
         cmd_id=command.cmd_id,
         payload=payload,
     )
+
+
+def build_start_live_stream_transport_frame(*, sequence: int = 0xB4BB) -> bytes:
+    """Build the fixed djictl/node-osmo/Moblin start-transport payload."""
+
+    command = LIVESTREAM_COMMANDS["start_live_stream_transport"]
+    return encode_duml_frame(
+        sender=command.sender,
+        receiver=command.receiver,
+        sequence=sequence,
+        flags=0x40,
+        cmd_set=command.cmd_set,
+        cmd_id=command.cmd_id,
+        payload=bytes.fromhex("01011a000101"),
+    )

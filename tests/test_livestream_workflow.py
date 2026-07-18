@@ -10,10 +10,12 @@ import pytest
 from openframetap.devices.pocket3_livestream import (
     load_fixed_proposal,
     load_fixed_stream_proposal,
+    load_fixed_start_transport_proposal,
     load_fixed_wifi_proposal,
     write_prepare_recovery_proposal,
     write_prepare_proposal,
     write_stream_proposal,
+    write_start_transport_proposal,
     write_wifi_proposal,
 )
 from openframetap.network.secrets import WifiProvisioningSecrets
@@ -29,6 +31,7 @@ from openframetap.protocol.livestream_commands import (
     build_prepare_to_live_stream_frame,
     build_prepare_stream_stage2_frame,
     build_configure_live_stream_frame,
+    build_start_live_stream_transport_frame,
     build_wifi_connect_frame,
 )
 from openframetap.workflows.pocket3_rtmp import Pocket3RtmpWorkflow
@@ -134,6 +137,43 @@ def test_stream_proposal_is_private_and_sanitized(tmp_path: Path) -> None:
     assert payload["bitrate_kbps"] == 4000
     with pytest.raises(PermissionError, match="address"):
         load_fixed_stream_proposal(private_path, expected_address="AA:BB:CC:DD:EE:FF")
+
+
+def test_start_transport_frame_matches_reviewed_exact_example_and_override(tmp_path: Path) -> None:
+    raw = build_start_live_stream_transport_frame()
+    assert raw.hex() == "551304030208b4bb40028e01011a0001013238"
+    assert hashlib.sha256(raw).hexdigest() == (
+        "a5ea033f25d80ddd6b7ffe2f09b9693abede7c95458fab1da88b3bc140c6d150"
+    )
+    command = get_command_definition("start_live_stream_transport")
+    decoded = decode_duml_frame(raw)
+    validate_command_frame(command, decoded)
+    with pytest.raises(CommandRejected, match="denied"):
+        assert_send_allowed(
+            command,
+            SendAuthorization.single_command(
+                command.name, purpose="fixture", approval_reference="fixture"
+            ),
+        )
+    authorization = SendAuthorization.explicit_single_frame(
+        command.name,
+        frame_sha256=hashlib.sha256(raw).hexdigest(),
+        purpose="reversible fixed start fixture",
+        approval_reference="fixture",
+        allow_denied_command=True,
+    )
+    assert_send_allowed(command, authorization)
+    proposal = write_start_transport_proposal(
+        address=ADDRESS,
+        private_root=tmp_path / "artifacts" / "private" / "proposals",
+        sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
+        configure_result_sha256="7" * 64,
+    )
+    loaded, loaded_raw = load_fixed_start_transport_proposal(
+        Path(proposal["private_proposal"]), expected_address=ADDRESS
+    )
+    assert loaded_raw == raw
+    assert loaded["frame_sha256"] == hashlib.sha256(raw).hexdigest()
 
 
 def test_prepare_proposal_sha_address_and_sanitization(tmp_path: Path) -> None:

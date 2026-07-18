@@ -447,3 +447,26 @@ same authorization.
   response or cause Pocket 3 to open the first RTMP TCP connection. If neither
   occurs, the separate `02/8E` start command remains a later proposal; it will
   not be guessed or sent automatically.
+
+## C-class configure result and reversible start candidate
+
+- 【实机事实】The owner-invoked `08/78` frame was written once. The Pocket
+  returned same-sequence `C0/08/78 payload D6` with valid CRCs approximately
+  102 ms later. The 61.383-second BLE session retained 2,361 valid frames with
+  no CRC, reassembly, or connection error.
+- 【实机事实】MediaMTX recorded no new publisher after the `08/78` write. Thus
+  the `D6` response is not treated as success, regardless of node-osmo/Moblin's
+  response-ID-only state transition.
+- 【参考实现结论】djictl sends a second fixed request after configuration:
+  `02 -> 08`, sequence `B4BB`, `40/02/8E`, payload `01011A000101`. Its source
+  includes the exact wire example `551304030208b4bb40028e01011a0001013238`.
+  node-osmo and Moblin contain the same six-byte start payload as their
+  confirmation/start message, although they limit its use differently.
+- 【捕获推断】The absence of RTMP traffic after a prompt `08/78` response makes
+  the separately documented start-transport step the narrowest next test. It
+  changes only the current livestream session and is recoverable by stopping
+  the server or leaving livestream mode on the Pocket.
+- 【实机事实】The start candidate passes CRC8, CRC16 and structured round trip;
+  SHA-256 is
+  `a5ea033f25d80ddd6b7ffe2f09b9693abede7c95458fab1da88b3bc140c6d150`.
+  It is exact-frame allowlisted while generic start/stop `02/8E` remains denied.

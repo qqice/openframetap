@@ -80,6 +80,7 @@ async def manual_send_pocket3_frame(
     required_incoming_raw: bytes | None = None,
     prerequisite_timeout: float = 10.0,
     transport_factory: Callable = BluezBleTransport,
+    allow_denied_command: bool = False,
 ) -> tuple[dict, bool]:
     """Execute exactly one user-confirmed frame, then listen without follow-ups.
 
@@ -106,6 +107,7 @@ async def manual_send_pocket3_frame(
         frame_sha256=digest,
         purpose="one fixed user-confirmed DUML proposal",
         approval_reference=f"manual-frame-sha256:{digest}",
+        allow_denied_command=allow_denied_command,
     )
     assert_send_allowed(command, authorization)
     expected = (command.sender, command.receiver, command.cmd_set, command.cmd_id)

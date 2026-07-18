@@ -26,6 +26,8 @@ PREPARE_RECOVERY_RESULT="$ROOT_DIR/artifacts/private/pocket3-rtmp-prepare-recove
 PREPARE_RECOVERY_RESULT_SHA256="34e0dfd95a52336e620edfa2206a05bd14fad533140fa793b85b89356285e9a1"
 APPROVED_STREAM_SHA256="0765f4462b530b05071172f0175bed14f70720b4479b414ce89dea44481a7fc4"
 APPROVED_STREAM_DIR="$ROOT_DIR/artifacts/private/proposals/stream-20260718T192544Z"
+APPROVED_STREAM_START_SHA256="a5ea033f25d80ddd6b7ffe2f09b9693abede7c95458fab1da88b3bc140c6d150"
+APPROVED_STREAM_START_DIR="$ROOT_DIR/artifacts/private/proposals/stream-start-20260718T195251Z"
 RTMP_WORKFLOW_STATE="${OPENFRAMETAP_RTMP_WORKFLOW_STATE:-$ROOT_DIR/artifacts/private/pocket3-rtmp-workflow.json}"
 PREPARE_RESULT="${OPENFRAMETAP_PREPARE_RESULT:-$ROOT_DIR/artifacts/sanitized/pocket3-rtmp-prepare-20260719-010705/prepare-result.json}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
@@ -175,6 +177,7 @@ Usage:
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-recovery
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-wifi-recovery
   ./scripts/remote.sh pocket3-rtmp-send-approved-stream
+  ./scripts/remote.sh pocket3-rtmp-send-approved-stream-start
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
   ./scripts/remote.sh pocket3-rtmp-configure-stream-key
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
@@ -633,6 +636,63 @@ chmod 600 artifacts/private/approved-stream/proposal-private.json artifacts/priv
     stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
     [[ "$stem" == private/pocket3-rtmp-stream-* ]] || {
       echo '[openframetap] Missing private stream-send artifact marker' >&2
+      exit 3
+    }
+    pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
+    exit "$status"
+    ;;
+  pocket3-rtmp-send-approved-stream-start)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    proposal_json="$APPROVED_STREAM_START_DIR/proposal-private.json"
+    proposal_bin="$APPROVED_STREAM_START_DIR/proposal.bin"
+    approval_consumed="$APPROVED_STREAM_START_DIR/autonomous-reversible.consumed"
+    [[ -f "$proposal_json" && -f "$proposal_bin" && -f "$RTMP_WORKFLOW_STATE" ]] || {
+      echo '[openframetap] Fixed start proposal or workflow state is missing.' >&2
+      exit 2
+    }
+    [[ ! -e "$approval_consumed" ]] || {
+      echo '[openframetap] Refused: fixed one-time start proposal is already consumed.' >&2
+      exit 4
+    }
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"stream_sent"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: start proposal requires stream_sent state.' >&2
+      exit 4
+    }
+    actual_sha256="$(sha256sum "$proposal_bin" | awk '{print tolower($1)}')"
+    [[ "$actual_sha256" == "$APPROVED_STREAM_START_SHA256" ]] || exit 5
+    grep -Fq "\"frame_sha256\": \"$APPROVED_STREAM_START_SHA256\"" "$proposal_json" || exit 5
+    grep -Fq '"command": "start_live_stream_transport"' "$proposal_json" || exit 5
+    printf '%s\n' '[openframetap] AUTONOMOUS REVERSIBLE: one fixed 02/8E start frame.'
+    printf '[openframetap] Frame SHA-256: %s\n' "$APPROVED_STREAM_START_SHA256"
+    printf '%s\n' '[openframetap] No retry, stop, Wi-Fi, camera, or gimbal frame is included.'
+    printf 'consumed_at_utc=%s\nframe_sha256=%s\n' "$(timestamp)" "$APPROVED_STREAM_START_SHA256" \
+      >"$approval_consumed"
+    deploy || exit $?
+    run_remote rtmp-stream-start-stage "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server status | grep -q '\"state\": \"running\"'
+mkdir -p artifacts/private/approved-stream-start
+chmod 700 artifacts/private artifacts/private/approved-stream-start"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$proposal_json" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-stream-start/proposal-private.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/pocket3-rtmp-workflow.json.new" || exit $?
+    run_remote rtmp-stream-start-finalize "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/approved-stream-start/proposal-private.json.new artifacts/private/approved-stream-start/proposal-private.json
+mv artifacts/private/pocket3-rtmp-workflow.json.new artifacts/private/pocket3-rtmp-workflow.json
+chmod 600 artifacts/private/approved-stream-start/proposal-private.json artifacts/private/pocket3-rtmp-workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    run_remote rtmp-stream-start-send \
+      "cd $REMOTE_DIR && OPENFRAMETAP_USER_INITIATED=1 OPENFRAMETAP_AUTONOMOUS_REVERSIBLE=1 OPENFRAMETAP_COMMAND_INVOCATION_APPROVAL=1 OPENFRAMETAP_FIXED_PROPOSAL_SHA256='$APPROVED_STREAM_START_SHA256' bash scripts/capture-pocket3.sh rtmp-stream-start-proposal '$POCKET3_ADDRESS' 60 'artifacts/private/approved-stream-start/proposal-private.json' 'artifacts/private/pocket3-rtmp-workflow.json'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ "$stem" == private/pocket3-rtmp-stream-start-* ]] || {
+      echo '[openframetap] Missing private stream-start artifact marker' >&2
       exit 3
     }
     pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?

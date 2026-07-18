@@ -16,6 +16,9 @@ EXPLICIT_DENIED_FRAME_OVERRIDES = {
     "prepare_stream_transport": (
         "624c92dc2ce9364346e1b5e548f8be260b9f21e35fca20503b38315c90999286"
     ),
+    "start_live_stream_transport": (
+        "a5ea033f25d80ddd6b7ffe2f09b9693abede7c95458fab1da88b3bc140c6d150"
+    ),
 }
 
 
@@ -251,6 +254,11 @@ def validate_command_frame(command: CommandDefinition, frame) -> None:
         if frame.flags != 0x40 or frame.payload != b"\x00\x01\x1C\x00":
             raise CommandRejected(
                 "prepare_stream_transport must be 40028E with payload 00011C00"
+            )
+    elif command.name == "start_live_stream_transport":
+        if frame.flags != 0x40 or frame.payload != b"\x01\x01\x1A\x00\x01\x01":
+            raise CommandRejected(
+                "start_live_stream_transport must be 40028E with payload 01011A000101"
             )
     elif command.name == "wifi_connect":
         payload = frame.payload
