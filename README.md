@@ -73,6 +73,7 @@ python -m openframetap duml decode --hex 550e046604026b1300041c48e5e2
 python -m openframetap video server doctor
 python -m openframetap pocket3 rtmp plan
 python -m openframetap pocket3 rtmp status
+python -m openframetap pocket3 rtmp analyze-prepare <private-capture-directory> --sanitized-output <sanitized-directory>
 ```
 
 See [architecture](docs/architecture.md), [Pocket 3 RTMP protocol](docs/pocket3-rtmp-protocol.md), [telemetry experiment](docs/telemetry-experiment.md), [manual pairing](docs/manual-pairing.md), [reference matrix](docs/reference-matrix.md), [hardware audit](docs/hardware-audit.md), [display baseline](docs/display-baseline.md), [protocol notes](docs/protocol-notes.md), and [roadmap](docs/roadmap.md).

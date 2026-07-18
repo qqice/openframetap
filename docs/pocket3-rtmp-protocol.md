@@ -1,7 +1,8 @@
 # Pocket 3 external-Wi-Fi RTMP protocol plan
 
-This document covers only the preflight and first proposal boundary. No Pocket
-3 livestream, Wi-Fi, camera, or gimbal command has been sent in this phase yet.
+This document covers the preflight and independently authorized prepare
+boundary. The one approved prepare frame has now been sent and acknowledged;
+no Wi-Fi, RTMP configuration, camera, or gimbal command has been sent.
 
 ## Verified LAN and receiver baseline
 
@@ -133,6 +134,32 @@ SHA-256:       e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6
 The authorization does **not** cover `07/47`, `08/78`, either `02/8E` payload,
 stop, retry, or any camera/gimbal command. Each would require a new proposal and
 separate owner authorization.
+
+## Prepare response result
+
+- 【实机事实】The owner executed the fixed wrapper once. btmon contains exactly
+  one FFF5 Write Command, carrying the approved frame SHA-256
+  `e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6`.
+- 【实机事实】Pocket returned exactly one matching transaction response:
+  sender `0x08`, receiver `0x02`, sequence `0x8C12`, flags `0xC0`, command
+  `02/E1`, payload `00`. Its raw-frame SHA-256 is
+  `849bf1fe90cd2b6a8a66fc7bd28e20c8c38972cf8a77c608cb0758c8d6a1e011`;
+  CRC8 and CRC16 both validate.
+- 【统计观察】The response arrived 3853.420 ms after the local FFF5 write
+  completion event. The 16.5-second session recorded 608 notifications and 608
+  DUML frames, with zero CRC, reassembly, connection, or automatic-follow-up
+  failures.
+- 【捕获推断】Reverse direction, ACK flags, matching sequence and command IDs
+  identify this frame as the response to the approved request.
+- 【参考实现结论】The reviewed projects and public Mimo capture interpret
+  `C0/02/E1 payload 00` as successful livestream preparation.
+- 【实机事实】The persistent workflow is now `prepare_acknowledged`. This state
+  does not authorize or construct the next command.
+
+Private evidence is under `pocket3-rtmp-prepare-20260719-010705`; its sanitized
+offline result is under the same-named `artifacts/sanitized` directory. The
+analysis verified the capture checksum manifest before parsing and confirmed
+that all raw files remained unchanged afterward.
 
 ## Secret and failure boundary
 

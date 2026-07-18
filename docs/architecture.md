@@ -24,7 +24,7 @@ Existing five-point touch input
 Future joystick/buttons and gimbal controller
 ```
 
-The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration, DUML codec, stream reassembly, passive FFF4 notification capture, conservative telemetry recording, application-layer pairing state machine, human event marker, and immutable-evidence analysis now exist. A user-space RTMP receiver, LAN-only address selection, secret-safe evidence split, local RTMP publish/readback self-test, and a persistent fail-closed Pocket 3 livestream proposal workflow now also exist. The first prepare frame has one-time owner authorization but remains offline pending owner execution; Wi-Fi provisioning, Pocket-originated video, UI, and control have not been executed.
+The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration, DUML codec, stream reassembly, passive FFF4 notification capture, conservative telemetry recording, application-layer pairing state machine, human event marker, and immutable-evidence analysis now exist. A user-space RTMP receiver, LAN-only address selection, secret-safe evidence split, local RTMP publish/readback self-test, and a persistent fail-closed Pocket 3 livestream proposal workflow now also exist. The first prepare frame was sent once by the owner and received the expected matching-sequence ACK. Wi-Fi provisioning, Pocket-originated video, UI, and control have not been executed.
 
 ## Layer boundaries
 
