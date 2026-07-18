@@ -121,6 +121,8 @@ async def run_prepare_recovery_session(
     confirmation_callback: ConfirmationCallback,
     wifi_proposal_path: Path | None = None,
     wifi_sequence: int = 0x8C1A,
+    stream_proposal_path: Path | None = None,
+    start_proposal_path: Path | None = None,
     response_timeout: float = 15.0,
     passive_seconds: float = 10.0,
     transport_factory: Callable = BluezBleTransport,
@@ -146,6 +148,26 @@ async def run_prepare_recovery_session(
             },
             wifi_raw,
         )
+    if (stream_proposal_path is None) != (start_proposal_path is None):
+        raise ValueError("stream and start proposals must be supplied together")
+    stream_stage: tuple[dict, bytes] | None = None
+    start_stage: tuple[dict, bytes] | None = None
+    if stream_proposal_path is not None:
+        if wifi_stage is None:
+            raise ValueError("stream stages require the same-session Wi-Fi stage")
+        from openframetap.devices.pocket3_livestream import (
+            load_fixed_start_transport_proposal,
+            load_fixed_stream_proposal,
+        )
+
+        stream_proposal, stream_raw = load_fixed_stream_proposal(
+            stream_proposal_path, expected_address=address
+        )
+        start_proposal, start_raw = load_fixed_start_transport_proposal(
+            start_proposal_path, expected_address=address
+        )
+        stream_stage = ({**stream_proposal, "stage": "stream_configure"}, stream_raw)
+        start_stage = ({**start_proposal, "stage": "stream_start"}, start_raw)
     output_dir.mkdir(parents=True, exist_ok=True)
     candidates_path = output_dir / "recovery-candidates.jsonl"
     recovery_events_path = output_dir / "recovery-events.jsonl"
@@ -155,9 +177,13 @@ async def run_prepare_recovery_session(
         output_dir,
         address=address,
         operation=(
-            "owner-confirmed-prepare-and-wifi-recovery-same-connection"
-            if wifi_stage is not None
-            else "owner-confirmed-prepare-recovery-same-connection"
+            "autonomous-reversible-full-stream-session"
+            if stream_stage is not None
+            else (
+                "owner-confirmed-prepare-and-wifi-recovery-same-connection"
+                if wifi_stage is not None
+                else "owner-confirmed-prepare-recovery-same-connection"
+            )
         ),
     )
     reassembler = DumlStreamReassembler()
@@ -186,6 +212,8 @@ async def run_prepare_recovery_session(
     stage1_response: dict | None = None
     stage2_response: dict | None = None
     wifi_response: dict | None = None
+    stream_response: dict | None = None
+    start_response: dict | None = None
     started = time.monotonic()
 
     async def propose_and_send_stage(
@@ -309,6 +337,33 @@ async def run_prepare_recovery_session(
                 raise RuntimeError("unexpected matching-sequence Wi-Fi retry response")
             return frame
 
+    async def wait_matching_response(
+        *, sequence: int, cmd_set: int, cmd_id: int, sender: int
+    ) -> DumlFrame:
+        deadline = time.monotonic() + response_timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"timeout waiting for {sequence:04X} C0/{cmd_set:02X}/{cmd_id:02X}"
+                )
+            frame = await asyncio.wait_for(frames.get(), timeout=remaining)
+            if (frame.sequence, frame.cmd_set, frame.cmd_id) != (
+                sequence,
+                cmd_set,
+                cmd_id,
+            ):
+                continue
+            if not (
+                frame.sender == sender
+                and frame.receiver == 0x02
+                and frame.flags == 0xC0
+                and frame.crc8_valid
+                and frame.crc16_valid
+            ):
+                raise RuntimeError("unexpected matching-sequence stream response")
+            return frame
+
     try:
         await transport.connect()
         await transport.subscribe(notification_handler)
@@ -346,6 +401,51 @@ async def run_prepare_recovery_session(
                             payload_hex=response3.payload.hex(),
                         )
                         result = "wifi_retry_response_observed"
+                    if stream_stage is not None:
+                        if response3 is None or response3.payload not in {
+                            b"\x00\x00",
+                            b"\x00\x00\x00",
+                        }:
+                            raise RuntimeError(
+                                "same-session stream stages require explicit Wi-Fi success"
+                            )
+                        if not await propose_and_send_stage(
+                            stream_stage, allow_denied_command=False
+                        ):
+                            result = "cancelled_before_stream_configure"
+                        else:
+                            response4 = await wait_matching_response(
+                                sequence=0x8C2C,
+                                cmd_set=0x08,
+                                cmd_id=0x78,
+                                sender=0x08,
+                            )
+                            stream_response = response4.to_dict()
+                            recovery_event(
+                                "stream_configure_response",
+                                raw_hex=response4.raw.hex(),
+                                payload_hex=response4.payload.hex(),
+                            )
+                            if not await propose_and_send_stage(
+                                start_stage, allow_denied_command=True
+                            ):
+                                result = "cancelled_before_stream_start"
+                            else:
+                                response5 = await wait_matching_response(
+                                    sequence=0xB4BB,
+                                    cmd_set=0x02,
+                                    cmd_id=0x8E,
+                                    sender=0x08,
+                                )
+                                start_response = response5.to_dict()
+                                recovery_event(
+                                    "stream_start_response",
+                                    raw_hex=response5.raw.hex(),
+                                    payload_hex=response5.payload.hex(),
+                                )
+                                result = "full_stream_sequence_responses_observed"
+                                if passive_seconds:
+                                    await asyncio.sleep(passive_seconds)
         connected_at_end = transport.is_connected
     except (KeyboardInterrupt, asyncio.CancelledError):
         error = "cancelled"
@@ -382,17 +482,24 @@ async def run_prepare_recovery_session(
                 "unapproved_follow_up_frames": 0,
                 "preapproved_conditional_stage2": True,
                 "preapproved_conditional_frame_count": (
-                    2 if wifi_stage is not None else 1
+                    4 if stream_stage is not None else (2 if wifi_stage is not None else 1)
                 ),
                 "wifi_frames_sent": sum(
                     item["command"] == "wifi_connect" for item in sent
                 ),
-                "rtmp_configuration_frames_sent": 0,
+                "rtmp_configuration_frames_sent": sum(
+                    item["command"] == "configure_live_stream" for item in sent
+                ),
+                "rtmp_start_frames_sent": sum(
+                    item["command"] == "start_live_stream_transport" for item in sent
+                ),
                 "bluez_pairing_requested": False,
                 "recovery_result": result,
                 "stage1_response": stage1_response,
                 "stage2_response": stage2_response,
                 "wifi_response": wifi_response,
+                "stream_response": stream_response,
+                "start_response": start_response,
             },
         )
     successful_results = {"prepare_stage2_response_validated"}
@@ -401,4 +508,6 @@ async def run_prepare_recovery_session(
             "wifi_retry_written_after_validated_prepare",
             "wifi_retry_response_observed",
         }
+    if stream_stage is not None:
+        successful_results = {"full_stream_sequence_responses_observed"}
     return summary, error is None and result in successful_results

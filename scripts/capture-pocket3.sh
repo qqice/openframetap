@@ -14,7 +14,10 @@ proposal_path="${4:-}"
 workflow_state_path="${5:-}"
 wifi_proposal_path="${5:-}"
 combined_workflow_state_path="${6:-}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] || {
+full_stream_proposal_path="${6:-}"
+full_start_proposal_path="${7:-}"
+full_workflow_state_path="${8:-}"
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] || {
   echo 'unsupported capture operation' >&2
   exit 2
 }
@@ -33,18 +36,19 @@ case "$operation" in
   rtmp-wifi-proposal) prefix="pocket3-rtmp-wifi" ;;
   rtmp-stream-proposal) prefix="pocket3-rtmp-stream" ;;
   rtmp-stream-start-proposal) prefix="pocket3-rtmp-stream-start" ;;
+  rtmp-full-stream-recovery) prefix="pocket3-rtmp-full-stream" ;;
   rtmp-prepare-recovery) prefix="pocket3-rtmp-prepare-recovery" ;;
   rtmp-prepare-wifi-recovery) prefix="pocket3-rtmp-prepare-wifi-recovery" ;;
 esac
 stem="$prefix-$stamp"
-if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
+if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
   artifact_relative="private/$stem"
 else
   artifact_relative="$stem"
 fi
 output_dir="artifacts/$artifact_relative"
 mkdir -p "$output_dir"
-[[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] && chmod 700 "$output_dir"
+[[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] && chmod 700 "$output_dir"
 snoop_path="$output_dir/capture.btsnoop"
 text_path="$output_dir/btmon.txt"
 session_output="$output_dir/session-output.txt"
@@ -98,15 +102,16 @@ stop_btmon() {
 }
 
 finalize_checksums() {
-  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-stream-proposal" && "$operation" != "rtmp-stream-start-proposal" && "$operation" != "rtmp-prepare-recovery" && "$operation" != "rtmp-prepare-wifi-recovery" ]]; then
+  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-stream-proposal" && "$operation" != "rtmp-stream-start-proposal" && "$operation" != "rtmp-full-stream-recovery" && "$operation" != "rtmp-prepare-recovery" && "$operation" != "rtmp-prepare-wifi-recovery" ]]; then
     return 0
   fi
   local names=(capture.btsnoop btmon.txt notifications.jsonl duml-frames.jsonl events.jsonl)
   if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" ]]; then
     names+=(summary.json transmission.json session-output.txt)
     [[ "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" ]] && names+=(server.log)
-  elif [[ "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
+  elif [[ "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" || "$operation" == "rtmp-full-stream-recovery" ]]; then
     names+=(summary.json recovery-candidates.jsonl recovery-events.jsonl session-output.txt)
+    [[ "$operation" == "rtmp-full-stream-recovery" ]] && names+=(server.log)
   fi
   local name
   : >"$output_dir/checksums.sha256"
@@ -248,11 +253,25 @@ case "$operation" in
       --output-dir "$output_dir" --state-file "$combined_workflow_state_path" \
       2>&1 | tee "$session_output"
     ;;
+  rtmp-full-stream-recovery)
+    [[ "${OPENFRAMETAP_AUTONOMOUS_REVERSIBLE:-0}" == "1" ]] || {
+      echo 'full stream recovery requires the fixed reversible wrapper' >&2
+      exit 4
+    }
+    [[ -f "$proposal_path" && -f "$wifi_proposal_path" && -f "$full_stream_proposal_path" && -f "$full_start_proposal_path" && -f "$full_workflow_state_path" ]] || {
+      echo 'one or more fixed full-stream proposal files are missing' >&2
+      exit 2
+    }
+    OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" -m openframetap pocket3 rtmp recover-full-stream \
+      "$proposal_path" "$wifi_proposal_path" "$full_stream_proposal_path" "$full_start_proposal_path" \
+      --address "$address" --seconds "$seconds" --output-dir "$output_dir" \
+      --state-file "$full_workflow_state_path" 2>&1 | tee "$session_output"
+    ;;
 esac
 session_status=${PIPESTATUS[0]}
 set -e
 
-if [[ ( "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" ) && -f runtime/rtmp/server.log ]]; then
+if [[ ( "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" ) && -f runtime/rtmp/server.log ]]; then
   cp runtime/rtmp/server.log "$output_dir/server.log"
   chmod 600 "$output_dir/server.log" 2>/dev/null || true
 fi

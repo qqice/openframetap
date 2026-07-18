@@ -267,6 +267,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
     )
+    rtmp_full_stream = rtmp_commands.add_parser(
+        "recover-full-stream",
+        help="run five fixed, response-gated frames in one BLE connection",
+    )
+    rtmp_full_stream.add_argument("prepare_proposal", type=Path)
+    rtmp_full_stream.add_argument("wifi_proposal", type=Path)
+    rtmp_full_stream.add_argument("stream_proposal", type=Path)
+    rtmp_full_stream.add_argument("start_proposal", type=Path)
+    rtmp_full_stream.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    rtmp_full_stream.add_argument("--seconds", type=int, default=60)
+    rtmp_full_stream.add_argument("--response-timeout", type=float, default=15.0)
+    rtmp_full_stream.add_argument("--output-dir", type=Path, required=True)
+    rtmp_full_stream.add_argument(
+        "--state-file",
+        type=Path,
+        default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
+    )
     rtmp_analyze_prepare = rtmp_commands.add_parser(
         "analyze-prepare", help="offline-validate a captured prepare response"
     )
@@ -1141,6 +1161,55 @@ def main(argv: list[str] | None = None) -> int:
                         "rtmp_configuration_frames_sent": payload.get(
                             "rtmp_configuration_frames_sent"
                         ),
+                        "private_output": str(args.output_dir),
+                    },
+                    indent=2,
+                )
+            )
+            return 0 if ok else 1
+        if args.rtmp_command == "recover-full-stream":
+            if (
+                os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1"
+                or os.environ.get("OPENFRAMETAP_AUTONOMOUS_REVERSIBLE") != "1"
+            ):
+                print("REFUSED: full stream recovery requires the fixed reversible wrapper.")
+                return 4
+            from openframetap.workflows.prepare_recovery_session import (
+                run_prepare_recovery_session,
+            )
+
+            require_private_directory(args.output_dir)
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            if workflow.phase != "waiting_for_rtmp":
+                print(
+                    "REFUSED: full stream recovery requires waiting_for_rtmp state, "
+                    f"found {workflow.phase}"
+                )
+                return 4
+            payload, ok = asyncio.run(
+                run_prepare_recovery_session(
+                    args.address,
+                    proposal_path=args.prepare_proposal,
+                    wifi_proposal_path=args.wifi_proposal,
+                    wifi_sequence=0x8C1A,
+                    stream_proposal_path=args.stream_proposal,
+                    start_proposal_path=args.start_proposal,
+                    output_dir=args.output_dir,
+                    confirmation_callback=lambda _candidate: True,
+                    response_timeout=args.response_timeout,
+                    passive_seconds=args.seconds,
+                )
+            )
+            print(
+                json.dumps(
+                    {
+                        "ok": ok,
+                        "recovery_result": payload.get("recovery_result"),
+                        "writes_attempted": payload.get("writes_attempted"),
+                        "sent_frames": payload.get("sent_frames"),
+                        "wifi_response": payload.get("wifi_response"),
+                        "stream_response": payload.get("stream_response"),
+                        "start_response": payload.get("start_response"),
                         "private_output": str(args.output_dir),
                     },
                     indent=2,

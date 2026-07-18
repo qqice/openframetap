@@ -178,6 +178,7 @@ Usage:
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-wifi-recovery
   ./scripts/remote.sh pocket3-rtmp-send-approved-stream
   ./scripts/remote.sh pocket3-rtmp-send-approved-stream-start
+  ./scripts/remote.sh pocket3-rtmp-run-full-stream-session
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
   ./scripts/remote.sh pocket3-rtmp-configure-stream-key
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
@@ -697,6 +698,56 @@ chmod 600 artifacts/private/approved-stream-start/proposal-private.json artifact
     }
     pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
+    exit "$status"
+    ;;
+  pocket3-rtmp-run-full-stream-session)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    prepare_json="$APPROVED_RECOVERY_DIR/proposal-private.json"
+    wifi_json="$APPROVED_WIFI_RECOVERY_DIR/proposal-private.json"
+    stream_json="$APPROVED_STREAM_DIR/proposal-private.json"
+    start_json="$APPROVED_STREAM_START_DIR/proposal-private.json"
+    session_consumed="$APPROVED_STREAM_START_DIR/full-stream-session.consumed"
+    [[ -f "$prepare_json" && -f "$wifi_json" && -f "$stream_json" && -f "$start_json" && -f "$RTMP_WORKFLOW_STATE" ]] || exit 2
+    [[ ! -e "$session_consumed" ]] || {
+      echo '[openframetap] Refused: full-stream session is already consumed.' >&2
+      exit 4
+    }
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"waiting_for_rtmp"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: full-stream session requires waiting_for_rtmp state.' >&2
+      exit 4
+    }
+    printf '%s\n' '[openframetap] AUTONOMOUS REVERSIBLE: five response-gated frames in one BLE connection.'
+    printf '%s\n' '[openframetap] No loop, random mutation, stop, camera, or gimbal command is included.'
+    printf 'consumed_at_utc=%s\n' "$(timestamp)" >"$session_consumed"
+    deploy || exit $?
+    run_remote rtmp-full-stream-stage "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server status | grep -q '\"state\": \"running\"'
+mkdir -p artifacts/private/approved-full-stream
+chmod 700 artifacts/private artifacts/private/approved-full-stream"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$prepare_json" "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-full-stream/prepare.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$wifi_json" "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-full-stream/wifi.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$stream_json" "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-full-stream/stream.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$start_json" "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-full-stream/start.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/pocket3-rtmp-workflow.json.new" || exit $?
+    run_remote rtmp-full-stream-finalize "set -eu
+cd $REMOTE_DIR
+for name in prepare wifi stream start; do mv artifacts/private/approved-full-stream/\$name.json.new artifacts/private/approved-full-stream/\$name.json; done
+mv artifacts/private/pocket3-rtmp-workflow.json.new artifacts/private/pocket3-rtmp-workflow.json
+chmod 600 artifacts/private/approved-full-stream/*.json artifacts/private/pocket3-rtmp-workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    run_remote rtmp-full-stream-send \
+      "cd $REMOTE_DIR && OPENFRAMETAP_AUTONOMOUS_REVERSIBLE=1 bash scripts/capture-pocket3.sh rtmp-full-stream-recovery '$POCKET3_ADDRESS' 60 'artifacts/private/approved-full-stream/prepare.json' 'artifacts/private/approved-full-stream/wifi.json' 'artifacts/private/approved-full-stream/stream.json' 'artifacts/private/approved-full-stream/start.json' 'artifacts/private/pocket3-rtmp-workflow.json'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ "$stem" == private/pocket3-rtmp-full-stream-* ]] || {
+      echo '[openframetap] Missing full-stream artifact marker' >&2
+      exit 3
+    }
+    pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     exit "$status"
     ;;
   pocket3-rtmp-configure-wifi-secrets)
