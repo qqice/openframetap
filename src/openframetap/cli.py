@@ -116,6 +116,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     video = subcommands.add_parser("video", help="user-space RTMP ingest tools")
     video_commands = video.add_subparsers(dest="video_command", required=True)
+    video_doctor = video_commands.add_parser(
+        "doctor", help="read-only decoder and media-stack capability audit"
+    )
+    video_doctor.add_argument("--output-dir", type=Path, required=True)
+    video_benchmark = video_commands.add_parser(
+        "benchmark", help="benchmark every explicit H.264 decoder against one sample"
+    )
+    video_benchmark.add_argument("--input", type=Path, required=True)
+    video_benchmark.add_argument("--all-decoders", action="store_true")
+    video_benchmark.add_argument("--output-dir", type=Path, required=True)
     video_server = video_commands.add_parser("server", help="MediaMTX lifecycle")
     video_server_commands = video_server.add_subparsers(
         dest="video_server_command", required=True
@@ -150,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
     )
+    display = subcommands.add_parser("display", help="existing Wayland/DSI display tools")
+    display_commands = display.add_subparsers(dest="display_command", required=True)
+    display_doctor = display_commands.add_parser(
+        "doctor", help="discover the active local Wayland session and DSI layout"
+    )
+    display_doctor.add_argument("--output-dir", type=Path, required=True)
 
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
@@ -354,6 +370,35 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "video" and args.video_command == "doctor":
+        from openframetap.video.decoder_probe import run_video_doctor
+
+        payload = run_video_doctor(args.output_dir)
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "video" and args.video_command == "benchmark":
+        if not args.all_decoders:
+            print("VIDEO_BENCHMARK_FAILED: --all-decoders is required")
+            return 2
+        from openframetap.video.decode_benchmark import run_decode_benchmark
+
+        try:
+            payload = run_decode_benchmark(args.input, args.output_dir)
+        except (FileNotFoundError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(f"VIDEO_BENCHMARK_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "display" and args.display_command == "doctor":
+        from openframetap.display.session import run_display_doctor
+
+        try:
+            payload = run_display_doctor(args.output_dir)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(f"DISPLAY_DOCTOR_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
     if args.command == "secrets" and args.secrets_command == "configure-stream-key":
         if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
             print("REFUSED: RTMP stream-key setup requires the owner at an interactive TTY.")

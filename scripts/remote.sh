@@ -171,6 +171,9 @@ Usage:
   ./scripts/remote.sh rtmp-start
   ./scripts/remote.sh rtmp-status
   ./scripts/remote.sh rtmp-stop
+  ./scripts/remote.sh video-doctor
+  ./scripts/remote.sh display-doctor
+  ./scripts/remote.sh video-benchmark <local-sample>
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
@@ -786,6 +789,61 @@ chmod 600 artifacts/private/pocket3-rtmp-workflow.json" || exit $?
     fi
     printf '[openframetap] PRIVATE_SAMPLE_DIR=%s\n' "$private_output"
     printf '[openframetap] SANITIZED_SAMPLE_DIR=%s\n' "$sanitized_output"
+    exit "$status"
+    ;;
+  video-doctor)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="video-doctor-$stamp"
+    run_remote video-doctor "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/$stem
+.venv/bin/python -m openframetap video doctor --output-dir artifacts/private/$stem
+printf 'ARTIFACT_DIR=private/$stem\n'"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    ;;
+  display-doctor)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="display-doctor-$stamp"
+    run_remote display-doctor "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/$stem
+.venv/bin/python -m openframetap display doctor --output-dir artifacts/private/$stem
+printf 'ARTIFACT_DIR=private/$stem\n'"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    ;;
+  video-benchmark)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    sample_path="$2"
+    [[ -f "$sample_path" ]] || { echo "sample not found: $sample_path" >&2; exit 2; }
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="video-benchmark-$stamp"
+    remote_sample="artifacts/private/video-input/$stamp-sample.flv"
+    run_remote video-benchmark-stage "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/video-input artifacts/private/$stem
+chmod 700 artifacts/private/video-input artifacts/private/$stem"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$sample_path" \
+      "$TARGET:${REMOTE_DIR#\~/}/$remote_sample.new" || exit $?
+    run_remote video-benchmark-run "set -eu
+cd $REMOTE_DIR
+mv '$remote_sample.new' '$remote_sample'
+chmod 600 '$remote_sample'
+.venv/bin/python -m openframetap video benchmark --input '$remote_sample' --all-decoders --output-dir 'artifacts/private/$stem'
+rm -f '$remote_sample'
+printf 'ARTIFACT_DIR=private/$stem\n'"
+    status=$?
+    pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     exit "$status"
     ;;
   pocket3-rtmp-configure-wifi-secrets)

@@ -1,0 +1,11 @@
+{
+  "pocket3_720p_live_sample": {
+    "path": "artifacts/private/pocket3-live-sample-20260718T202213Z/sample.flv",
+    "sha256": "d7c75567108846511450366c5b7655b53e3add0895b0cf3fb6e83ac6ccaab346",
+    "duration_seconds": 8,
+    "video": "H.264 High 1280x720 approximately 29.97 fps YUV420P",
+    "audio": "AAC LC 48000 Hz stereo",
+    "private": true,
+    "committed": false
+  }
+}
