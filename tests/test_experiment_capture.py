@@ -116,7 +116,7 @@ def test_event_jsonl_serialization(tmp_path: Path) -> None:
 
 def test_passive_experiment_records_same_clock_events_and_frames(tmp_path: Path) -> None:
     FakeTransport.instances.clear()
-    reader = ScriptedReader(["0", "9", "m", "q"], ["88", "safe manual note"])
+    reader = ScriptedReader(["r", "0", "9", "m", "q"], ["88", "safe manual note"])
     session, ok = asyncio.run(
         run_passive_experiment(
             "fixture",
@@ -186,7 +186,7 @@ def test_nonzero_fff5_counter_fails_closed(tmp_path: Path) -> None:
             duration=1,
             output_dir=tmp_path,
             transport_factory=UnsafeCounterTransport,
-            key_reader_factory=lambda: ScriptedReader(["q"]),
+            key_reader_factory=lambda: ScriptedReader(["r", "q"]),
         )
     )
     assert not ok
@@ -204,7 +204,7 @@ def test_device_disconnect_is_preserved_in_session(tmp_path: Path) -> None:
             duration=1,
             output_dir=tmp_path,
             transport_factory=DisconnectedTransport,
-            key_reader_factory=lambda: ScriptedReader(["q"]),
+            key_reader_factory=lambda: ScriptedReader(["r", "q"]),
         )
     )
     assert session["disconnect_count"] == 1

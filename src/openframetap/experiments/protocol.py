@@ -34,6 +34,7 @@ KEY_HELP = """Pocket 3 passive telemetry experiment
 No FFF5 writes will be performed.
 
 Keys:
+r  ready; start the timed procedure
 0  baseline/static
 1  body yaw left start
 2  body yaw right start
@@ -62,4 +63,5 @@ E. Optionally press 8 immediately before a safe recenter action performed on
    the Pocket itself. The program never sends that action.
 F. Press 9 near the beginning and end to enter the displayed battery percent.
 Press m to annotate a skipped or unusual step. Press q to stop and save.
+The duration countdown starts only after key r.
 """

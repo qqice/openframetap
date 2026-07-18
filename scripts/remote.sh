@@ -125,7 +125,7 @@ pull_named_artifacts() {
 
 extract_stem() {
   local marker="$1"
-  sed -n "s/^${marker}=//p" "$LAST_LOG_DIR/stdout.txt" | tail -n 1
+  sed -n "s/.*${marker}=//p" "$LAST_LOG_DIR/stdout.txt" | tail -n 1
 }
 
 usage() {

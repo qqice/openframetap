@@ -27,6 +27,7 @@ python -m openframetap pocket3 experiment \
 ## Keys and sequence
 
 ```text
+r  ready; start the timed procedure
 0  baseline/static
 1  body yaw left start
 2  body yaw right start
@@ -42,6 +43,8 @@ s  mark stable interval
 e  end current action
 q  stop and save
 ```
+
+The 180-second countdown begins only after `r`, so reading the guide and positioning the Pocket does not consume the controlled-action interval.
 
 Start and end with key `9` and enter the integer displayed on the Pocket screen. Use `0`, wait at least 10 seconds, `s`, wait another 10 seconds, then `e` for the baseline. For each yaw, pitch, and roll direction, mark the start, move slowly by hand, mark `s` while holding, press `7` before returning, mark `s` after reaching neutral, and press `e`. Key `8` only marks an action the owner performs on the Pocket itself. Key `m` records a skipped step or irregularity.
 

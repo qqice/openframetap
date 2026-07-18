@@ -57,6 +57,7 @@ async def run_passive_experiment(
     stop_reason = "duration_elapsed"
     att_mtu: int | None = None
     connected_at_end = False
+    timed_procedure_started_ns: int | None = None
     event_writer.record(
         ExperimentEvent.now(
             event_code="session_start",
@@ -71,9 +72,41 @@ async def run_passive_experiment(
         await transport.subscribe(recorder.record_notification)
         print(KEY_HELP, flush=True)
         print(PROCEDURE_GUIDE, flush=True)
-        deadline_ns = started_ns + int(duration * 1_000_000_000)
         reader = key_reader_factory()
         with reader:
+            print(
+                "Press r when the Pocket is positioned and you are ready to start the "
+                f"{duration:g}-second procedure. Press q to stop without starting.",
+                flush=True,
+            )
+            while timed_procedure_started_ns is None:
+                key = await reader.read_key(timeout=300.0)
+                if key is None:
+                    stop_reason = "readiness_timeout"
+                    raise TimeoutError("no readiness confirmation received within 300 seconds")
+                key = key.lower()
+                if key == "r":
+                    timed_procedure_started_ns = time.monotonic_ns()
+                    event_writer.record(
+                        ExperimentEvent.now(
+                            event_code="procedure_ready",
+                            event_name="timed_procedure_started",
+                            phase="session",
+                        )
+                    )
+                    print("TIMED PROCEDURE STARTED", flush=True)
+                elif key == "q":
+                    stop_reason = "user_requested_before_start"
+                    break
+                elif key not in {"\r", "\n", " ", "\t"}:
+                    print("Not started yet: press r when ready or q to stop.", flush=True)
+            if timed_procedure_started_ns is None:
+                connected_at_end = transport.is_connected
+            deadline_ns = (
+                timed_procedure_started_ns + int(duration * 1_000_000_000)
+                if timed_procedure_started_ns is not None
+                else time.monotonic_ns()
+            )
             while True:
                 remaining = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
                 if remaining <= 0:
@@ -173,6 +206,12 @@ async def run_passive_experiment(
             "end_time_utc": finished_wall.isoformat(),
             "actual_duration_seconds": actual_seconds,
             "requested_duration_seconds": duration,
+            "timed_procedure_started_monotonic_ns": timed_procedure_started_ns,
+            "timed_procedure_actual_seconds": (
+                max(0.0, (time.monotonic_ns() - timed_procedure_started_ns) / 1_000_000_000)
+                if timed_procedure_started_ns is not None
+                else 0.0
+            ),
             "att_mtu": att_mtu,
             "notifications_received": recorder.notification_count,
             "duml_frames_received": recorder.reassembler.stats.frames_ok,

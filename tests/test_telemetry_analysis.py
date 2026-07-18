@@ -239,6 +239,7 @@ def test_complete_analysis_keeps_raw_files_immutable(tmp_path: Path) -> None:
         "event-alignment.json",
         "correlations.csv",
         "message-pair-analysis.json",
+        "message-observations.json",
         "telemetry-report.md",
         "state-model.json",
     ):

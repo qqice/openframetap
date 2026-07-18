@@ -241,6 +241,8 @@ def _pair_analysis(
     )
     return {
         "alignment_windows": alignment_windows,
+        "left_variable_candidate_count": len(left_candidates),
+        "right_variable_candidate_count": len(right_candidates),
         "correlations": correlations[:100],
     }
 
@@ -355,6 +357,15 @@ def _axis_candidates(candidates: Sequence[dict[str, Any]]) -> dict[str, dict[str
         for candidate in candidates:
             if candidate["command"] not in {"04/05", "04/27"}:
                 continue
+            if candidate["encoding"] not in {
+                "int16_le",
+                "int16_be",
+                "int32_le",
+                "int32_be",
+                "float32_le",
+                "float32_be",
+            }:
+                continue
             score = (
                 candidate.get("event_correlations", {})
                 .get("axis_scores", {})
@@ -373,6 +384,28 @@ def _axis_candidates(candidates: Sequence[dict[str, Any]]) -> dict[str, dict[str
                 "confidence": confidence,
                 "scale_status": "fixed_scale_candidates_only_not_selected_as_semantics",
             }
+    return result
+
+
+def _message_observations(frames: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for command in ("04/05", "04/27", "04/1C", "04/38", "0D/02", "00/81", "02/80"):
+        selected = [frame for frame in frames if _frame_command(frame) == command]
+        payloads = [frame.get("payload_hex", "") for frame in selected]
+        times = [int(frame["monotonic_ns"]) for frame in selected]
+        duration = (max(times) - min(times)) / 1_000_000_000 if len(times) > 1 else 0.0
+        lengths: dict[str, int] = {}
+        for payload in payloads:
+            length = str(len(payload) // 2)
+            lengths[length] = lengths.get(length, 0) + 1
+        result[command] = {
+            "count": len(selected),
+            "payload_lengths": lengths,
+            "unique_payload_count": len(set(payloads)),
+            "update_rate_hz": ((len(selected) - 1) / duration if duration > 0 else 0.0),
+            "first_payload_hex": payloads[0] if payloads else None,
+            "last_payload_hex": payloads[-1] if payloads else None,
+        }
     return result
 
 
@@ -634,6 +667,7 @@ def _write_markdown_report(
     axes: dict[str, dict[str, Any]],
     checksum_before: dict[str, Any],
     checksum_after: dict[str, Any],
+    message_observations: dict[str, Any],
 ) -> None:
     command_counts = session.get("message_counts", {})
     lines = [
@@ -648,6 +682,7 @@ def _write_markdown_report(
         "## Message observations",
         "",
         f"【统计观察】Message counts: `{json.dumps(command_counts, sort_keys=True)}`.",
+        f"【统计观察】Payload-level observations: `{json.dumps(message_observations, sort_keys=True)}`.",
         f"【统计观察】The bounded enumerator produced {len(candidates)} aligned numeric, bit, float-domain-filtered, and ASCII candidates grouped by payload length.",
         "",
         "## Controlled motion candidates",
@@ -676,7 +711,12 @@ def _write_markdown_report(
             f"【捕获推断】The strongest retained pair is `{top['left_candidate']}` versus `{top['right_candidate']}` with Pearson={top['pearson']} and Spearman={top['spearman']}. Correlation alone does not name either field."
         )
     else:
-        lines.append("【待验证假设】No sufficiently sampled 04/05 ↔ 04/27 numeric pair was available.")
+        if pair_analysis["right_variable_candidate_count"] == 0:
+            lines.append(
+                "【统计观察】04/05 and 04/27 aligned in time, but 04/27 had no changing bounded numeric field in this session, so a numeric correlation cannot be computed."
+            )
+        else:
+            lines.append("【待验证假设】No sufficiently sampled 04/05 ↔ 04/27 numeric pair was available.")
     lines.extend(
         [
             "",
@@ -721,6 +761,7 @@ def analyze_experiment(
     events = _read_jsonl(experiment_dir / "events.jsonl")
     candidates = generate_field_candidates(frames, events)
     pair_analysis = _pair_analysis(frames, candidates, windows_ms)
+    message_observations = _message_observations(frames)
     event_alignment = _event_alignment(frames, events, windows_ms)
     battery = _battery_comparison(
         frames, events, candidates, window_ms=battery_window_ms
@@ -743,6 +784,10 @@ def analyze_experiment(
         json.dumps(pair_analysis, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    (analysis_dir / "message-observations.json").write_text(
+        json.dumps(message_observations, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     (analysis_dir / "state-model.json").write_text(
         json.dumps(state.to_dict(), indent=2, ensure_ascii=False, allow_nan=False) + "\n",
         encoding="utf-8",
@@ -762,6 +807,7 @@ def analyze_experiment(
         axes=axes,
         checksum_before=checksum_before,
         checksum_after=checksum_after,
+        message_observations=message_observations,
     )
     metadata = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -778,6 +824,7 @@ def analyze_experiment(
             for axis, proposal in axes.items()
         },
         "battery_comparison": battery,
+        "message_observations": message_observations,
     }
     (analysis_dir / "analysis-metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
