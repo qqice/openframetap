@@ -17,6 +17,9 @@ APPROVED_PREPARE_SHA256="e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae
 APPROVED_PREPARE_DIR="$ROOT_DIR/artifacts/private/proposals/prepare-20260718T163611Z"
 APPROVED_WIFI_SHA256="8751117a3022d1a0057a4d6ea1ef38505314d1d75995fd4d46fc8d85e25ed72e"
 APPROVED_WIFI_DIR="$ROOT_DIR/artifacts/private/proposals/wifi-20260718T173350Z"
+APPROVED_RECOVERY_STAGE1_SHA256="a9c619ff04901974b5c30d255730e9a807d4d1919ab05ae89504777df11a2ee5"
+APPROVED_RECOVERY_STAGE2_SHA256="624c92dc2ce9364346e1b5e548f8be260b9f21e35fca20503b38315c90999286"
+APPROVED_RECOVERY_DIR="$ROOT_DIR/artifacts/private/proposals/prepare-recovery-20260718T181349Z"
 RTMP_WORKFLOW_STATE="${OPENFRAMETAP_RTMP_WORKFLOW_STATE:-$ROOT_DIR/artifacts/private/pocket3-rtmp-workflow.json}"
 PREPARE_RESULT="${OPENFRAMETAP_PREPARE_RESULT:-$ROOT_DIR/artifacts/sanitized/pocket3-rtmp-prepare-20260719-010705/prepare-result.json}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
@@ -163,6 +166,7 @@ Usage:
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
+  ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-recovery
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
@@ -402,6 +406,83 @@ chmod 600 artifacts/private/approved-wifi/proposal-private.json artifacts/privat
     }
     pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
+    exit "$status"
+    ;;
+  pocket3-rtmp-send-approved-prepare-recovery)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: prepare recovery requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    proposal_json="$APPROVED_RECOVERY_DIR/proposal-private.json"
+    stage1_bin="$APPROVED_RECOVERY_DIR/stage1.bin"
+    stage2_bin="$APPROVED_RECOVERY_DIR/stage2.bin"
+    approval_consumed="$APPROVED_RECOVERY_DIR/owner-command-invocation.consumed"
+    [[ -f "$proposal_json" && -f "$stage1_bin" && -f "$stage2_bin" && -f "$RTMP_WORKFLOW_STATE" ]] || {
+      echo '[openframetap] Fixed approved recovery proposal, frames, or workflow state is missing.' >&2
+      exit 2
+    }
+    [[ ! -e "$approval_consumed" ]] || {
+      echo '[openframetap] Refused: this fixed one-time prepare-recovery authorization is already consumed.' >&2
+      exit 4
+    }
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"wifi_connected_or_unknown"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: prepare recovery requires wifi_connected_or_unknown state.' >&2
+      exit 4
+    }
+    actual_stage1_sha256="$(sha256sum "$stage1_bin" | awk '{print tolower($1)}')"
+    actual_stage2_sha256="$(sha256sum "$stage2_bin" | awk '{print tolower($1)}')"
+    [[ "$actual_stage1_sha256" == "$APPROVED_RECOVERY_STAGE1_SHA256" ]] || {
+      echo '[openframetap] Approved recovery Stage 1 SHA-256 mismatch.' >&2
+      exit 5
+    }
+    [[ "$actual_stage2_sha256" == "$APPROVED_RECOVERY_STAGE2_SHA256" ]] || {
+      echo '[openframetap] Approved recovery Stage 2 SHA-256 mismatch.' >&2
+      exit 5
+    }
+    grep -Fq "\"frame_sha256\": \"$APPROVED_RECOVERY_STAGE1_SHA256\"" "$proposal_json" || {
+      echo '[openframetap] Recovery proposal does not name the approved Stage 1 SHA-256.' >&2
+      exit 5
+    }
+    grep -Fq "\"frame_sha256\": \"$APPROVED_RECOVERY_STAGE2_SHA256\"" "$proposal_json" || {
+      echo '[openframetap] Recovery proposal does not name the approved Stage 2 SHA-256.' >&2
+      exit 5
+    }
+    printf '%s\n' '[openframetap] COMMAND INVOCATION AUTHORIZES TWO FIXED PREPARE FRAMES:'
+    printf '[openframetap] Stage 1 02/E1 SHA-256: %s\n' "$APPROVED_RECOVERY_STAGE1_SHA256"
+    printf '[openframetap] Stage 2 02/8E SHA-256: %s\n' "$APPROVED_RECOVERY_STAGE2_SHA256"
+    printf '%s\n' '[openframetap] Stage 2 is sent once only after the exact Stage 1 ACK in the same connection.'
+    printf '%s\n' '[openframetap] No Wi-Fi retry, RTMP configuration, stream start/stop, or other command is included.'
+    printf 'consumed_at_utc=%s\nstage1_sha256=%s\nstage2_sha256=%s\n' \
+      "$(timestamp)" "$APPROVED_RECOVERY_STAGE1_SHA256" "$APPROVED_RECOVERY_STAGE2_SHA256" \
+      >"$approval_consumed"
+    deploy || exit $?
+    run_remote rtmp-prepare-recovery-stage "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/approved-prepare-recovery
+chmod 700 artifacts/private artifacts/private/approved-prepare-recovery"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$proposal_json" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-prepare-recovery/proposal-private.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/pocket3-rtmp-workflow.json.new" || exit $?
+    run_remote rtmp-prepare-recovery-finalize "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/approved-prepare-recovery/proposal-private.json.new artifacts/private/approved-prepare-recovery/proposal-private.json
+mv artifacts/private/pocket3-rtmp-workflow.json.new artifacts/private/pocket3-rtmp-workflow.json
+chmod 600 artifacts/private/approved-prepare-recovery/proposal-private.json artifacts/private/pocket3-rtmp-workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    run_remote_interactive rtmp-prepare-recovery-send \
+      "cd $REMOTE_DIR && bash scripts/capture-pocket3.sh rtmp-prepare-recovery '$POCKET3_ADDRESS' 10 'artifacts/private/approved-prepare-recovery/proposal-private.json' 'artifacts/private/pocket3-rtmp-workflow.json'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ "$stem" == private/pocket3-rtmp-prepare-recovery-* ]] || {
+      echo '[openframetap] Missing private prepare recovery artifact marker' >&2
+      exit 3
+    }
+    pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     exit "$status"
     ;;
   pocket3-rtmp-configure-wifi-secrets)

@@ -140,6 +140,22 @@ def test_cli_send_approved_has_no_arbitrary_hex_option() -> None:
         )
 
 
+def test_cli_prepare_recovery_has_no_frame_or_command_override() -> None:
+    from openframetap.cli import build_parser
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            [
+                "pocket3",
+                "rtmp",
+                "recover-prepare",
+                "proposal.json",
+                "--hex",
+                "55",
+            ]
+        )
+
+
 def test_wifi_proposal_cli_has_no_plaintext_credential_options() -> None:
     from openframetap.cli import build_parser
 

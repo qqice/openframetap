@@ -301,16 +301,28 @@ Stage 2: missing prepare transport step
 wire:     02 -> 08, 40/02/8E, sequence FFAB, payload 00011C00
 frame:    551104920208ffab40028e00011c003bc8
 SHA-256: 624c92dc2ce9364346e1b5e548f8be260b9f21e35fca20503b38315c90999286
-gate:     offered only after exact Stage 1 ACK and separate full-SHA confirmation
+gate:     sent once only after exact Stage 1 ACK in the owner-invoked fixed command
 ```
 
 - 【实机事实】Both frames pass CRC8, CRC16, structured decode and byte-for-byte
   round-trip. Stage 2 matches the public Pocket 3 Mimo request exactly.
 - 【实机事实】Both remain `locally_sent=false`; maximum send count is one per
-  frame, with no automatic retry or automatic follow-up.
+  frame, with no automatic retry and no unapproved follow-up.
+- 【实机事实】The owner approved both exact frame hashes. Under the current
+  operator boundary, invoking the fixed wrapper is the authorization event; no
+  second SHA prompt is required. The wrapper creates a local consumed marker
+  before deployment so the same fixed authorization cannot be invoked twice.
+- 【实机事实】The dedicated session keeps one BLE connection, subscribes FFF4,
+  sends Stage 1 once, and exposes the exact Stage 2 override only after an
+  `08 -> 02 C0/02/E1`, sequence `FEAB`, payload `00`, CRC-valid response.
+  Timeout, disconnect, or any same-sequence field mismatch stops before Stage 2.
+- 【实机事实】Generic authorization still rejects `prepare_stream_transport`.
+  The transport override is bound to Stage 2 SHA-256
+  `624c92dc2ce9364346e1b5e548f8be260b9f21e35fca20503b38315c90999286`;
+  no other denied command or `02/8E` payload can use it.
 - 【待验证假设】A valid stage2 response and the Pocket “preparing livestream”
   state will establish the missing prerequisite. The experiment stops there;
-  any Wi-Fi retry requires a later, separate exception proposal and approval.
+  the command contains no Wi-Fi retry, RTMP configuration, or stream start/stop.
 
 ## Secret and failure boundary
 
