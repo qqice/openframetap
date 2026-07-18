@@ -15,7 +15,8 @@ LOCAL_FFMPEG_BIN="${OPENFRAMETAP_LOCAL_FFMPEG_BIN:-/c/ffmpeg/bin/ffmpeg.exe}"
 LOCAL_FFPROBE_BIN="${OPENFRAMETAP_LOCAL_FFPROBE_BIN:-/c/ffmpeg/bin/ffprobe.exe}"
 APPROVED_PREPARE_SHA256="e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6"
 APPROVED_PREPARE_DIR="$ROOT_DIR/artifacts/private/proposals/prepare-20260718T163611Z"
-RTMP_WORKFLOW_STATE="$ROOT_DIR/artifacts/private/pocket3-rtmp-workflow.json"
+RTMP_WORKFLOW_STATE="${OPENFRAMETAP_RTMP_WORKFLOW_STATE:-$ROOT_DIR/artifacts/private/pocket3-rtmp-workflow.json}"
+PREPARE_RESULT="${OPENFRAMETAP_PREPARE_RESULT:-$ROOT_DIR/artifacts/sanitized/pocket3-rtmp-prepare-20260719-010705/prepare-result.json}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
 SCP_BIN="${OPENFRAMETAP_SCP_BIN:-scp}"
 SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
@@ -159,6 +160,8 @@ Usage:
   ./scripts/remote.sh rtmp-stop
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
+  ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
+  ./scripts/remote.sh pocket3-rtmp-propose-wifi
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
@@ -335,6 +338,63 @@ chmod 600 artifacts/private/approved-prepare/proposal-private.json artifacts/pri
     pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
     exit "$status"
+    ;;
+  pocket3-rtmp-configure-wifi-secrets)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: Wi-Fi secret setup requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    deploy || exit $?
+    run_remote_interactive rtmp-wifi-secret-setup \
+      "cd $REMOTE_DIR && OPENFRAMETAP_USER_INITIATED=1 .venv/bin/python -m openframetap secrets configure-wifi"
+    ;;
+  pocket3-rtmp-propose-wifi)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -f "$RTMP_WORKFLOW_STATE" && -f "$PREPARE_RESULT" ]] || {
+      echo '[openframetap] Acknowledged workflow or sanitized prepare evidence is missing.' >&2
+      exit 2
+    }
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"prepare_acknowledged"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: Wi-Fi proposal requires prepare_acknowledged state.' >&2
+      exit 4
+    }
+    deploy || exit $?
+    run_remote rtmp-wifi-proposal-stage "set -eu
+cd $REMOTE_DIR
+test -f \"\$HOME/.config/openframetap/secrets.env\"
+test ! -L \"\$HOME/.config/openframetap/secrets.env\"
+test \"\$(stat -c %a \"\$HOME/.config/openframetap/secrets.env\")\" = 600
+mkdir -p artifacts/private/proposal-input artifacts/private/proposals artifacts/sanitized/proposals
+chmod 700 artifacts/private artifacts/private/proposal-input artifacts/private/proposals"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/proposal-input/workflow.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$PREPARE_RESULT" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/proposal-input/prepare-result.json.new" || exit $?
+    run_remote rtmp-wifi-proposal-input "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/proposal-input/workflow.json.new artifacts/private/proposal-input/workflow.json
+mv artifacts/private/proposal-input/prepare-result.json.new artifacts/private/proposal-input/prepare-result.json
+chmod 600 artifacts/private/proposal-input/workflow.json artifacts/private/proposal-input/prepare-result.json
+.venv/bin/python -m openframetap pocket3 rtmp propose wifi \\
+  --secret-file \"\$HOME/.config/openframetap/secrets.env\" \\
+  --prepare-result artifacts/private/proposal-input/prepare-result.json \\
+  --state-file artifacts/private/proposal-input/workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    stem="$(extract_stem PROPOSAL_STEM | tr -d '\r')"
+    [[ "$stem" == wifi-* ]] || {
+      echo '[openframetap] Refused: missing sanitized Wi-Fi proposal marker.' >&2
+      exit 3
+    }
+    pull_dir "artifacts/private/proposals/$stem" "$ROOT_DIR/artifacts/private/proposals" || exit $?
+    pull_dir "artifacts/sanitized/proposals/$stem" "$ROOT_DIR/artifacts/sanitized/proposals" || exit $?
+    pull_file artifacts/private/proposal-input/workflow.json "$ROOT_DIR/artifacts/private" || exit $?
+    mv "$ROOT_DIR/artifacts/private/workflow.json" "$RTMP_WORKFLOW_STATE"
+    printf '[openframetap] PRIVATE_PROPOSAL_DIR=%s\n' "$ROOT_DIR/artifacts/private/proposals/$stem"
+    printf '[openframetap] SANITIZED_PROPOSAL_DIR=%s\n' "$ROOT_DIR/artifacts/sanitized/proposals/$stem"
     ;;
   doctor)
     deploy || exit $?

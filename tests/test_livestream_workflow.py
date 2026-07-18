@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,9 @@ import pytest
 from openframetap.devices.pocket3_livestream import (
     load_fixed_proposal,
     write_prepare_proposal,
+    write_wifi_proposal,
 )
+from openframetap.network.secrets import WifiProvisioningSecrets
 from openframetap.protocol.commands import (
     CommandRejected,
     SendAuthorization,
@@ -18,7 +21,10 @@ from openframetap.protocol.commands import (
     validate_command_frame,
 )
 from openframetap.protocol.duml import decode_duml_frame
-from openframetap.protocol.livestream_commands import build_prepare_to_live_stream_frame
+from openframetap.protocol.livestream_commands import (
+    build_prepare_to_live_stream_frame,
+    build_wifi_connect_frame,
+)
 from openframetap.workflows.pocket3_rtmp import Pocket3RtmpWorkflow
 
 
@@ -106,3 +112,105 @@ def test_cli_send_approved_has_no_arbitrary_hex_option() -> None:
         build_parser().parse_args(
             ["pocket3", "rtmp", "send-approved", "proposal.json", "--hex", "55"]
         )
+
+
+def test_wifi_proposal_cli_has_no_plaintext_credential_options() -> None:
+    from openframetap.cli import build_parser
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["pocket3", "rtmp", "propose", "wifi", "--ssid", "secret", "--psk", "secret"]
+        )
+
+
+def test_wifi_frame_uses_two_length_prefixed_utf8_strings() -> None:
+    raw = build_wifi_connect_frame(ssid="Lab5G", psk="fixture-password")
+    decoded = decode_duml_frame(raw)
+    assert (decoded.sender, decoded.receiver, decoded.sequence) == (2, 7, 0x8C19)
+    assert (decoded.flags, decoded.cmd_set, decoded.cmd_id) == (0x40, 0x07, 0x47)
+    assert decoded.payload == b"\x05Lab5G\x10fixture-password"
+    assert decoded.crc8_valid and decoded.crc16_valid
+    validate_command_frame(get_command_definition("wifi_connect"), decoded)
+
+
+def test_wifi_proposal_is_private_and_sanitized_output_has_no_payload(
+    tmp_path: Path,
+) -> None:
+    secrets = WifiProvisioningSecrets("Fixture5G", "fixture-password")
+    payload = write_wifi_proposal(
+        address=ADDRESS,
+        secrets=secrets,
+        private_root=tmp_path / "artifacts" / "private" / "proposals",
+        sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
+        prepare_result_sha256="3" * 64,
+    )
+    private_text = Path(payload["private_proposal"]).read_text(encoding="utf-8")
+    sanitized_text = Path(payload["sanitized_proposal"]).read_text(encoding="utf-8")
+    private_payload = json.loads(private_text)
+    private_frame = bytes.fromhex(private_payload["frame_hex"])
+    assert b"Fixture5G" in private_frame
+    assert b"fixture-password" in private_frame
+    assert "Fixture5G" not in sanitized_text
+    assert "fixture-password" not in sanitized_text
+    assert payload["frame_sha256"] in sanitized_text
+    assert private_payload["frame_hex"] not in sanitized_text
+    assert "frame_hex" not in sanitized_text
+    assert payload["max_send_count"] == 1
+    assert payload["automatic_retry"] is False
+
+
+def test_wifi_proposal_cli_is_offline_and_stdout_is_sanitized(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from openframetap.cli import main
+
+    private = tmp_path / "artifacts" / "private"
+    sanitized = tmp_path / "artifacts" / "sanitized"
+    state_path = private / "workflow.json"
+    state = Pocket3RtmpWorkflow(phase="prepare_acknowledged")
+    state.save(state_path)
+    prepare_result = sanitized / "prepare-result.json"
+    prepare_result.parent.mkdir(parents=True)
+    prepare_result.write_text(
+        json.dumps(
+            {
+                "status": "prepare_acknowledged",
+                "response": {"cmd_set": "0x02", "cmd_id": "0xE1", "payload_hex": "00"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    secret_file = private / "secrets.env"
+    secret_file.write_text(
+        "OPENFRAMETAP_WIFI_SSID=Fixture5G\n"
+        "OPENFRAMETAP_WIFI_PSK=fixture-password\n",
+        encoding="utf-8",
+    )
+    if os.name != "nt":
+        secret_file.chmod(0o600)
+    status = main(
+        [
+            "pocket3",
+            "rtmp",
+            "propose",
+            "wifi",
+            "--address",
+            ADDRESS,
+            "--secret-file",
+            str(secret_file),
+            "--prepare-result",
+            str(prepare_result),
+            "--private-root",
+            str(private / "proposals"),
+            "--sanitized-root",
+            str(sanitized / "proposals"),
+            "--state-file",
+            str(state_path),
+        ]
+    )
+    output = capsys.readouterr().out
+    assert status == 0
+    assert "Fixture5G" not in output
+    assert "fixture-password" not in output
+    assert "PROPOSAL ONLY" in output
+    assert Pocket3RtmpWorkflow.load(state_path).phase == "wifi_proposed"

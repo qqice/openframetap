@@ -8,12 +8,13 @@ import json
 import os
 from pathlib import Path
 
-from openframetap.network.secrets import require_private_directory
+from openframetap.network.secrets import WifiProvisioningSecrets, require_private_directory
 from openframetap.protocol.commands import validate_command_frame
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.livestream_commands import (
     LIVESTREAM_COMMANDS,
     build_prepare_to_live_stream_frame,
+    build_wifi_connect_frame,
 )
 
 
@@ -150,3 +151,105 @@ def load_fixed_proposal(path: Path, *, expected_address: str) -> tuple[dict, byt
     decoded = decode_duml_frame(raw)
     validate_command_frame(command, decoded)
     return payload, raw
+
+
+def write_wifi_proposal(
+    *,
+    address: str,
+    secrets: WifiProvisioningSecrets,
+    private_root: Path,
+    sanitized_root: Path,
+    prepare_result_sha256: str,
+    sequence: int = 0x8C19,
+) -> dict:
+    """Write one sensitive 07/47 proposal; never print its frame or payload."""
+
+    command = LIVESTREAM_COMMANDS["wifi_connect"]
+    frame = build_wifi_connect_frame(
+        ssid=secrets.ssid, psk=secrets.psk, sequence=sequence
+    )
+    decoded = decode_duml_frame(frame)
+    if not (decoded.crc8_valid and decoded.crc16_valid) or decoded.raw != frame:
+        raise RuntimeError("offline Wi-Fi proposal round-trip validation failed")
+    validate_command_frame(command, decoded)
+    digest = hashlib.sha256(frame).hexdigest()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    private_dir = require_private_directory(private_root / f"wifi-{stamp}")
+    sanitized_dir = (sanitized_root / f"wifi-{stamp}").resolve()
+    if "sanitized" not in {part.lower() for part in sanitized_dir.parts}:
+        raise ValueError("sanitized proposal must be under artifacts/sanitized")
+    sanitized_dir.mkdir(parents=True, exist_ok=True)
+    private_payload = {
+        "schema_version": 1,
+        "stage": "wifi",
+        "command": command.name,
+        "target_address": address,
+        "frame_hex": frame.hex(),
+        "frame_sha256": digest,
+        "max_send_count": 1,
+        "automatic_retry": False,
+        "automatic_follow_up": False,
+        "contains_sensitive_data": True,
+        "evidence": {"prepare_result_sha256": prepare_result_sha256},
+        "secret_fingerprints": secrets.sanitized(),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "decoded": decoded.to_dict(),
+    }
+    private_json = private_dir / "proposal-private.json"
+    private_bin = private_dir / "proposal.bin"
+    _write_private(
+        private_json,
+        (json.dumps(private_payload, indent=2, ensure_ascii=False) + "\n").encode(),
+    )
+    _write_private(private_bin, frame)
+    secret_summary = secrets.sanitized()
+    sanitized = {
+        "schema_version": 1,
+        "stage": "wifi",
+        "command": command.name,
+        "target_address_masked": _mask_address(address),
+        "target_address_sha256": hashlib.sha256(address.upper().encode()).hexdigest(),
+        "source_component": f"0x{command.sender:02X}",
+        "target_component": f"0x{command.receiver:02X}",
+        "cmd_set": f"0x{command.cmd_set:02X}",
+        "cmd_id": f"0x{command.cmd_id:02X}",
+        "sequence": f"0x{sequence:04X}",
+        "flags": "0x40",
+        "payload_schema": command.payload_schema,
+        "payload_length": len(decoded.payload),
+        "ssid_masked": secret_summary["ssid_masked"],
+        "ssid_sha256": secret_summary["ssid_sha256"],
+        "ssid_encoded_length": secret_summary["ssid_encoded_length"],
+        "psk_length": secret_summary["psk_length"],
+        "psk_sha256": secret_summary["psk_sha256"],
+        "frame_sha256": digest,
+        "total_length": decoded.total_length,
+        "crc8_valid": decoded.crc8_valid,
+        "crc16_valid": decoded.crc16_valid,
+        "round_trip_valid": decoded.raw == frame,
+        "reference_sources": list(command.reference_sources),
+        "confidence": command.confidence,
+        "locally_sent": False,
+        "contains_sensitive_data": False,
+        "max_send_count": 1,
+        "automatic_retry": False,
+        "automatic_follow_up": False,
+        "evidence": {"prepare_result_sha256": prepare_result_sha256},
+        "expected_response": (
+            "same-sequence C0/07/47; public implementations conflict between "
+            "two-byte and three-byte zero success payloads"
+        ),
+        "risk": "instructs Pocket to join the named external Wi-Fi network",
+    }
+    sanitized_json = sanitized_dir / "proposal.json"
+    sanitized_json.write_text(
+        json.dumps(sanitized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (sanitized_dir / "proposal.sha256").write_text(
+        f"{digest}  private-proposal-frame\n", encoding="ascii"
+    )
+    return {
+        **sanitized,
+        "private_proposal": str(private_json),
+        "sanitized_proposal": str(sanitized_json),
+    }

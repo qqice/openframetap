@@ -194,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
     )
     rtmp_propose = rtmp_commands.add_parser("propose", help="generate one offline proposal")
-    rtmp_propose.add_argument("stage", choices=("prepare",))
+    rtmp_propose.add_argument("stage", choices=("prepare", "wifi"))
     rtmp_propose.add_argument(
         "--address",
         default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
@@ -205,8 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
     rtmp_propose.add_argument(
         "--sanitized-root", type=Path, default=Path("artifacts/sanitized/proposals")
     )
-    rtmp_propose.add_argument("--server-evidence-sha256", required=True)
-    rtmp_propose.add_argument("--pairing-evidence", required=True)
+    rtmp_propose.add_argument("--server-evidence-sha256")
+    rtmp_propose.add_argument("--pairing-evidence")
+    rtmp_propose.add_argument("--secret-file", type=Path)
+    rtmp_propose.add_argument("--prepare-result", type=Path)
     rtmp_propose.add_argument(
         "--state-file",
         type=Path,
@@ -246,11 +248,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rtmp_observe.add_argument("--seconds", type=int, default=30)
     rtmp_observe.add_argument("--output-dir", type=Path, required=True)
+    secrets = subcommands.add_parser("secrets", help="owner-only private secret setup")
+    secret_commands = secrets.add_subparsers(dest="secrets_command", required=True)
+    configure_wifi = secret_commands.add_parser(
+        "configure-wifi", help="prompt without echo and store a 0600 Wi-Fi secret file"
+    )
+    configure_wifi.add_argument(
+        "--path", type=Path, default=Path("~/.config/openframetap/secrets.env")
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "secrets" and args.secrets_command == "configure-wifi":
+        if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
+            print("REFUSED: Wi-Fi secret setup requires the owner at an interactive TTY.")
+            return 4
+        import getpass
+
+        from openframetap.network.secrets import (
+            WifiProvisioningSecrets,
+            load_wifi_provisioning_secrets,
+            store_wifi_provisioning_secrets,
+        )
+
+        ssid = getpass.getpass("Test-network SSID (input hidden): ")
+        psk = getpass.getpass("Test-network Wi-Fi PSK (input hidden): ")
+        confirmation = getpass.getpass("Repeat Wi-Fi PSK (input hidden): ")
+        if psk != confirmation:
+            print("REFUSED: Wi-Fi PSK confirmation did not match; no file was changed.")
+            return 4
+        secret_values = load_wifi_provisioning_secrets(
+            environ={
+                "OPENFRAMETAP_WIFI_SSID": ssid,
+                "OPENFRAMETAP_WIFI_PSK": psk,
+            }
+        )
+        path = args.path.expanduser()
+        backup = store_wifi_provisioning_secrets(
+            path,
+            WifiProvisioningSecrets(secret_values.ssid, secret_values.psk),
+        )
+        print(f"Wi-Fi secrets stored privately: {path} mode=0600")
+        if backup is not None:
+            print(f"Previous private file backed up: {backup} mode=0600")
+        print("No Pocket connection or BLE write was attempted.")
+        return 0
     if args.command == "video" and args.video_command == "server":
         from openframetap.network.interfaces import NetworkPreflightError
         from openframetap.video.rtmp_server import make_server, server_doctor
@@ -494,8 +538,12 @@ def main(argv: list[str] | None = None) -> int:
         from openframetap.devices.pocket3_livestream import (
             load_fixed_proposal,
             write_prepare_proposal,
+            write_wifi_proposal,
         )
-        from openframetap.network.secrets import require_private_directory
+        from openframetap.network.secrets import (
+            load_wifi_provisioning_secrets,
+            require_private_directory,
+        )
         from openframetap.workflows.pocket3_rtmp import (
             Pocket3RtmpWorkflow,
             workflow_plan,
@@ -551,44 +599,95 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0
         if args.rtmp_command == "propose":
-            evidence_sha = args.server_evidence_sha256.lower()
-            if len(evidence_sha) != 64 or any(ch not in "0123456789abcdef" for ch in evidence_sha):
-                raise SystemExit("--server-evidence-sha256 must be 64 lowercase hex characters")
-            pairing_digest = args.pairing_evidence.rsplit(":", 1)[-1].lower()
-            if len(pairing_digest) != 64 or any(
-                ch not in "0123456789abcdef" for ch in pairing_digest
-            ):
-                raise SystemExit(
-                    "--pairing-evidence must end with a 64-character lowercase SHA-256"
-                )
             workflow = Pocket3RtmpWorkflow.load(args.state_file)
-            if workflow.phase != "preflight":
-                print(f"REFUSED: prepare proposal requires preflight state, found {workflow.phase}")
-                return 4
-            workflow.transition(
-                "server_ready", evidence={"sanitized_selftest_sha256": evidence_sha}
-            )
-            workflow.transition(
-                "pairing_confirmed", evidence={"prior_pairing_evidence": args.pairing_evidence}
-            )
-            payload = write_prepare_proposal(
-                address=args.address,
-                private_root=args.private_root,
-                sanitized_root=args.sanitized_root,
-                server_evidence_sha256=evidence_sha,
-                pairing_evidence=args.pairing_evidence,
-            )
-            workflow.transition(
-                "prepare_proposed",
-                evidence={
-                    "proposal_sha256": payload["frame_sha256"],
-                    "locally_sent": False,
-                },
-            )
+            if args.stage == "prepare":
+                if not args.server_evidence_sha256 or not args.pairing_evidence:
+                    raise SystemExit(
+                        "prepare requires --server-evidence-sha256 and --pairing-evidence"
+                    )
+                evidence_sha = args.server_evidence_sha256.lower()
+                if len(evidence_sha) != 64 or any(
+                    ch not in "0123456789abcdef" for ch in evidence_sha
+                ):
+                    raise SystemExit(
+                        "--server-evidence-sha256 must be 64 lowercase hex characters"
+                    )
+                pairing_digest = args.pairing_evidence.rsplit(":", 1)[-1].lower()
+                if len(pairing_digest) != 64 or any(
+                    ch not in "0123456789abcdef" for ch in pairing_digest
+                ):
+                    raise SystemExit(
+                        "--pairing-evidence must end with a 64-character lowercase SHA-256"
+                    )
+                if workflow.phase != "preflight":
+                    print(
+                        "REFUSED: prepare proposal requires preflight state, "
+                        f"found {workflow.phase}"
+                    )
+                    return 4
+                workflow.transition(
+                    "server_ready", evidence={"sanitized_selftest_sha256": evidence_sha}
+                )
+                workflow.transition(
+                    "pairing_confirmed",
+                    evidence={"prior_pairing_evidence": args.pairing_evidence},
+                )
+                payload = write_prepare_proposal(
+                    address=args.address,
+                    private_root=args.private_root,
+                    sanitized_root=args.sanitized_root,
+                    server_evidence_sha256=evidence_sha,
+                    pairing_evidence=args.pairing_evidence,
+                )
+                workflow.transition(
+                    "prepare_proposed",
+                    evidence={
+                        "proposal_sha256": payload["frame_sha256"],
+                        "locally_sent": False,
+                    },
+                )
+            else:
+                if workflow.phase != "prepare_acknowledged":
+                    print(
+                        "REFUSED: Wi-Fi proposal requires prepare_acknowledged state, "
+                        f"found {workflow.phase}"
+                    )
+                    return 4
+                if args.secret_file is None or args.prepare_result is None:
+                    raise SystemExit("wifi requires --secret-file and --prepare-result")
+                prepare_result = json.loads(args.prepare_result.read_text(encoding="utf-8"))
+                if (
+                    prepare_result.get("status") != "prepare_acknowledged"
+                    or prepare_result.get("response", {}).get("cmd_set") != "0x02"
+                    or prepare_result.get("response", {}).get("cmd_id") != "0xE1"
+                    or prepare_result.get("response", {}).get("payload_hex") != "00"
+                ):
+                    raise SystemExit("--prepare-result does not contain the validated ACK")
+                import hashlib
+
+                prepare_result_sha = hashlib.sha256(args.prepare_result.read_bytes()).hexdigest()
+                secrets = load_wifi_provisioning_secrets(secret_file=args.secret_file)
+                payload = write_wifi_proposal(
+                    address=args.address,
+                    secrets=secrets,
+                    private_root=args.private_root,
+                    sanitized_root=args.sanitized_root,
+                    prepare_result_sha256=prepare_result_sha,
+                )
+                workflow.transition(
+                    "wifi_proposed",
+                    evidence={
+                        "proposal_sha256": payload["frame_sha256"],
+                        "prepare_result_sha256": prepare_result_sha,
+                        "locally_sent": False,
+                        "contains_sensitive_data": True,
+                    },
+                )
             workflow.save(args.state_file)
             safe = {key: value for key, value in payload.items() if key != "private_proposal"}
             safe["private_proposal"] = "artifacts/private/<redacted-proposal-path>"
             print(json.dumps(safe, indent=2, ensure_ascii=False))
+            print(f"PROPOSAL_STEM={Path(payload['sanitized_proposal']).parent.name}")
             print("PROPOSAL ONLY: no BLE connection or FFF5 write was attempted.")
             return 0
         if args.rtmp_command == "send-approved":

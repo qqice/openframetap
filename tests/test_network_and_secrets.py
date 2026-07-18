@@ -13,9 +13,12 @@ from openframetap.network.interfaces import (
 from openframetap.network.secrets import (
     LivestreamSecrets,
     SecretConfigurationError,
+    WifiProvisioningSecrets,
     load_livestream_secrets,
+    load_wifi_provisioning_secrets,
     require_private_directory,
     require_private_file,
+    store_wifi_provisioning_secrets,
 )
 
 
@@ -59,6 +62,22 @@ def test_load_secrets_reports_names_not_values() -> None:
         )
 
 
+def test_wifi_only_secrets_do_not_require_or_expose_stream_key() -> None:
+    secrets = load_wifi_provisioning_secrets(
+        environ={
+            "OPENFRAMETAP_WIFI_SSID": "Fixture5G",
+            "OPENFRAMETAP_WIFI_PSK": "fixture-password",
+        }
+    )
+    assert isinstance(secrets, WifiProvisioningSecrets)
+    rendered = repr(secrets) + str(secrets) + secrets.redact(
+        "Fixture5G fixture-password"
+    )
+    assert "Fixture5G" not in rendered
+    assert "fixture-password" not in rendered
+    assert "stream" not in str(secrets.sanitized()).lower()
+
+
 def test_secret_file_permissions_and_private_proposal_directory(tmp_path: Path) -> None:
     secret_file = tmp_path / "secrets.env"
     secret_file.write_text("OPENFRAMETAP_WIFI_SSID=Fixture\n", encoding="utf-8")
@@ -73,3 +92,17 @@ def test_secret_file_permissions_and_private_proposal_directory(tmp_path: Path) 
     with pytest.raises(SecretConfigurationError, match="artifacts/private"):
         require_private_directory(tmp_path / "public")
 
+
+def test_wifi_secret_file_is_private_and_backed_up_without_value_logging(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "secrets.env"
+    first = WifiProvisioningSecrets("Fixture5G", "fixture-password")
+    assert store_wifi_provisioning_secrets(path, first) is None
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+    second = WifiProvisioningSecrets("FixtureGuest", "another-password")
+    backup = store_wifi_provisioning_secrets(path, second)
+    assert backup is not None and backup.is_file()
+    assert "Fixture5G" in backup.read_text(encoding="utf-8")
+    assert "FixtureGuest" in path.read_text(encoding="utf-8")

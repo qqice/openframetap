@@ -115,3 +115,35 @@ def build_prepare_to_live_stream_frame(*, sequence: int = 0x8C12) -> bytes:
         payload=b"\x1A",
     )
 
+
+def _pack_dji_string(value: str, *, field_name: str) -> bytes:
+    encoded = value.encode("utf-8")
+    if not encoded or len(encoded) > 0xFF:
+        raise ValueError(f"{field_name} encoded length must be 1..255 bytes")
+    return bytes((len(encoded),)) + encoded
+
+
+def build_wifi_connect_frame(
+    *, ssid: str, psk: str, sequence: int = 0x8C19
+) -> bytes:
+    """Build the reference-derived 07/47 frame without logging its payload."""
+
+    ssid_bytes = ssid.encode("utf-8")
+    psk_bytes = psk.encode("utf-8")
+    if not 1 <= len(ssid_bytes) <= 32:
+        raise ValueError("SSID encoded length must be 1..32 bytes")
+    if not 8 <= len(psk_bytes) <= 63:
+        raise ValueError("Wi-Fi PSK encoded length must be 8..63 bytes")
+    command = LIVESTREAM_COMMANDS["wifi_connect"]
+    payload = _pack_dji_string(ssid, field_name="SSID") + _pack_dji_string(
+        psk, field_name="Wi-Fi PSK"
+    )
+    return encode_duml_frame(
+        sender=command.sender,
+        receiver=command.receiver,
+        sequence=sequence,
+        flags=0x40,
+        cmd_set=command.cmd_set,
+        cmd_id=command.cmd_id,
+        payload=payload,
+    )

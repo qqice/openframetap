@@ -252,6 +252,47 @@ def test_approved_prepare_wrapper_requires_real_terminal_before_ssh() -> None:
     assert "Exit status: 37" not in result.stdout
 
 
+def test_wifi_secret_wrapper_requires_real_terminal_before_ssh() -> None:
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "pocket3-rtmp-configure-wifi-secrets"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert "requires the device owner at a real terminal" in result.stderr
+    assert "Exit status: 37" not in result.stdout
+
+
+def test_wifi_proposal_wrapper_propagates_deploy_failure(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.json"
+    result_file = tmp_path / "prepare-result.json"
+    workflow.write_text('{"phase":"prepare_acknowledged"}\n', encoding="utf-8")
+    result_file.write_text('{"status":"prepare_acknowledged"}\n', encoding="utf-8")
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    env["OPENFRAMETAP_RTMP_WORKFLOW_STATE"] = shell_path(workflow)
+    env["OPENFRAMETAP_PREPARE_RESULT"] = shell_path(result_file)
+    completed = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "pocket3-rtmp-propose-wifi"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert completed.returncode == 37
+    assert "exit status: 37" in completed.stdout
+
+
 def test_rtmp_proposal_capture_failure_cleans_btmon(tmp_path: Path) -> None:
     start_file = tmp_path / "started"
     stop_file = tmp_path / "stopped"
