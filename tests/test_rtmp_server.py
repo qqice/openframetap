@@ -44,11 +44,14 @@ def test_start_status_stop_and_pid_cleanup(tmp_path: Path, monkeypatch) -> None:
     paths = RtmpPaths.under(tmp_path / "runtime")
     _fake_binary(paths.binary)
     monkeypatch.setattr("openframetap.video.rtmp_server.port_is_available", lambda *_: True)
-    monkeypatch.setattr("openframetap.video.rtmp_server.tcp_reachable", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "openframetap.video.rtmp_server.tcp_reachable",
+        lambda *_args, **_kwargs: paths.pid_file.exists(),
+    )
     server = RtmpServer(paths, "192.168.1.229")
     started = server.start(timeout=2)
     assert started.state == "running"
     assert started.pid
     stopped = server.stop(timeout=3)
-    assert stopped.state == "foreign_listener"  # mocked reachability remains true
+    assert stopped.state == "stopped"
     assert not paths.pid_file.exists()
