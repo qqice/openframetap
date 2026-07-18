@@ -6,6 +6,7 @@ LOCAL_ARTIFACTS="$ROOT_DIR/artifacts/local"
 REMOTE_ARTIFACTS="$ROOT_DIR/artifacts/remote"
 TARGET="${ROCK4D_SSH_HOST:-${OPENFRAMETAP_SSH_TARGET:-qqice@100.125.223.67}}"
 REMOTE_DIR="${OPENFRAMETAP_REMOTE_DIR:-~/openframetap-runtime}"
+POCKET3_ADDRESS="${POCKET3_BLE_ADDRESS:-E4:7A:2C:36:DC:FC}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
 SCP_BIN="${OPENFRAMETAP_SCP_BIN:-scp}"
 SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
@@ -76,6 +77,16 @@ pull_file() {
     "$TARGET:${REMOTE_DIR#\~/}/$remote_relative" "$destination/"
 }
 
+pull_dir() {
+  local remote_relative="$1"
+  local destination="$2"
+  mkdir -p "$destination"
+  printf '[openframetap] Pull directory: %s:%s/%s -> %s\n' \
+    "$TARGET" "$REMOTE_DIR" "$remote_relative" "$destination"
+  "$SCP_BIN" "${SSH_OPTIONS[@]}" -r \
+    "$TARGET:${REMOTE_DIR#\~/}/$remote_relative" "$destination/"
+}
+
 pull_named_artifacts() {
   local stem="$1"
   shift
@@ -102,6 +113,10 @@ Usage:
   ./scripts/remote.sh display-audit
   ./scripts/remote.sh ble-scan [seconds]
   ./scripts/remote.sh ble-probe <device-address>
+  ./scripts/remote.sh ble-listen [seconds]
+  ./scripts/remote.sh pocket3-pair-status
+  ./scripts/remote.sh pocket3-pair
+  ./scripts/remote.sh pocket3-telemetry [seconds]
   ./scripts/remote.sh setup-python
 EOF
 }
@@ -168,6 +183,50 @@ cd $REMOTE_DIR
     stamp="$(timestamp)"
     destination="$REMOTE_ARTIFACTS/gatt-${stamp}"
     pull_file artifacts/gatt-probe.json "$destination" || true
+    exit "$status"
+    ;;
+  ble-listen)
+    seconds="${2:-60}"
+    [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'seconds must be a positive integer' >&2; exit 2; }
+    deploy || exit $?
+    run_remote ble-listen "set -u
+cd $REMOTE_DIR
+bash scripts/capture-pocket3.sh listen '$POCKET3_ADDRESS' '$seconds'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR)"
+    [[ -n "$stem" ]] || { echo '[openframetap] Missing Pocket listen artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
+    exit "$status"
+    ;;
+  pocket3-pair-status)
+    deploy || exit $?
+    run_remote pocket3-pair-status "set -u
+cd $REMOTE_DIR
+bash scripts/capture-pocket3.sh pair-status '$POCKET3_ADDRESS' 10"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR)"
+    [[ -n "$stem" ]] || { echo '[openframetap] Missing pairing-status artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
+    exit "$status"
+    ;;
+  pocket3-pair)
+    deploy || exit $?
+    run_remote pocket3-pair "set -u
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap pocket3 pair start '$POCKET3_ADDRESS' --proposal-dir artifacts/local"
+    exit $?
+    ;;
+  pocket3-telemetry)
+    seconds="${2:-60}"
+    [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'seconds must be a positive integer' >&2; exit 2; }
+    deploy || exit $?
+    run_remote pocket3-telemetry "set -u
+cd $REMOTE_DIR
+bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR)"
+    [[ -n "$stem" ]] || { echo '[openframetap] Missing telemetry artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
     exit "$status"
     ;;
   *)

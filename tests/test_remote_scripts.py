@@ -132,3 +132,33 @@ def test_ctrl_c_path_cleans_up_btmon(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert start_file.exists()
     assert stop_file.read_text(encoding="utf-8") == "stopped"
+
+
+def test_pocket_listener_failure_cleans_up_btmon(tmp_path: Path) -> None:
+    start_file = tmp_path / "started"
+    stop_file = tmp_path / "stopped"
+    env = os.environ.copy()
+    env["OPENFRAMETAP_BTMON_BIN"] = shell_path(ROOT / "tests/fixtures/fake-btmon.sh")
+    env["OPENFRAMETAP_PYTHON_BIN"] = shell_path(ROOT / "tests/fixtures/fail-python.sh")
+    env["BTMON_START_FILE"] = shell_path(start_file)
+    env["BTMON_STOP_FILE"] = shell_path(stop_file)
+    env["FAKE_PYTHON_STATUS"] = "29"
+    result = subprocess.run(
+        [
+            bash_path(),
+            "scripts/capture-pocket3.sh",
+            "listen",
+            "00:11:22:33:44:55",
+            "1",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 29
+    assert start_file.exists()
+    assert stop_file.read_text(encoding="utf-8") == "stopped"
+    assert "ARTIFACT_DIR=pocket3-listen-" in result.stdout
