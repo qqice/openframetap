@@ -111,6 +111,29 @@ SHA-256:       e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6
   separate authorization; no subsequent Wi-Fi or stream frame is authorized by
   that approval.
 
+## Owner-operated approved send boundary
+
+- 【实机事实】On 2026-07-19 the device owner approved the first, single send of
+  this exact A-class `prepare_to_live_stream` frame. The approval names only the
+  frame whose SHA-256 is shown above.
+- 【实机事实】After the unexpected Windows restart, the local proposal still
+  passed its fixed SHA-256 check and the remote process/listener audit found no
+  active capture or RTMP process. No evidence indicates that the approved frame
+  was sent before the restart.
+- 【实机事实】The owner-only entry point is
+  `./scripts/remote.sh pocket3-rtmp-send-approved-prepare`. It refuses a
+  non-interactive stdin before SSH, deploys only the fixed private proposal,
+  and requires the owner to type the complete approved SHA-256 in the remote
+  TTY before one FFF5 write can occur.
+- 【待验证假设】The expected response remains a same-sequence `C0/02/E1`
+  response with payload `00`. The wrapper captures notifications and btmon
+  evidence but sends no automatic response or follow-up command regardless of
+  what is received.
+
+The authorization does **not** cover `07/47`, `08/78`, either `02/8E` payload,
+stop, retry, or any camera/gimbal command. Each would require a new proposal and
+separate owner authorization.
+
 ## Secret and failure boundary
 
 - 【实机事实】No NetworkManager secret/keyring/connection file was inspected.
@@ -125,4 +148,3 @@ SHA-256:       e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6
   loader now requires both 64-character prerequisite hashes, the invalid
   proposal is un-sendable, and the corrected proposal references the actual
   paired-session summary SHA.
-

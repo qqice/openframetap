@@ -38,7 +38,14 @@ Run POSIX scripts from Git Bash on Windows. Set `ROCK4D_SSH_HOST` when the defau
 ./scripts/remote.sh rtmp-status
 ./scripts/remote.sh rtmp-stop
 ./scripts/remote.sh rtmp-self-test
+./scripts/remote.sh pocket3-rtmp-send-approved-prepare
 ```
+
+The final command is an owner-operated, interactive, single-send wrapper for
+the fixed `prepare_to_live_stream` proposal only. It verifies the approved
+frame SHA-256 before deployment and still requires the full SHA-256 to be typed
+at the terminal. It does not authorize or send Wi-Fi credentials, an RTMP URL,
+`02/8E`, stop, or any automatic follow-up frame.
 
 The manual single-frame writer is documented separately and must only be invoked interactively by the device owner; Codex does not run it:
 

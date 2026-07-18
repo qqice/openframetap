@@ -59,7 +59,7 @@ This matrix separates public-source conclusions from OpenFrameTap capture eviden
 
 | Command | Source/target and wire command | Payload | Agreement and conflict | Confidence | Local Pocket status |
 | --- | --- | --- | --- | --- | --- |
-| Prepare livestream | App `02` -> video `08`, `40/02/E1` | `1A` | node-osmo, Moblin, and djictl agree; public Mimo traffic has `C0/02/E1 payload 00` response evidence. | High reference confidence | Offline proposal only; never sent locally. |
+| Prepare livestream | App `02` -> video `08`, `40/02/E1` | `1A` | node-osmo, Moblin, and djictl agree; public Mimo traffic has `C0/02/E1 payload 00` response evidence. | High reference confidence | Exact one-time frame authorized by the owner; still offline and not yet sent after restart recovery. |
 | Prepare transport stage2 | App `02` -> video `08`, `40/02/8E` | `00 01 1C 00` | djictl and a public Mimo request capture agree. node-osmo/Moblin Pocket 3 flows omit it. | Medium; flow conflict | Explicitly denied pending separate evidence and authorization. |
 | Connect Wi-Fi | App `02` -> Wi-Fi `07`, `40/07/47` | packed SSID + packed PSK | node-osmo, Moblin, and djictl agree on request packing. Public/reference response lengths conflict. | High request schema; medium response schema | Not proposed or sent; sensitive private-only category. |
 | Configure live stream | App `02` -> video `08`, `40/08/78` | fixed quality fields + packed RTMP URL | node-osmo, Moblin, and djictl agree on ordinary Pocket 3 payload structure. | High reference confidence | Not proposed or sent; stream key is private-only. |
