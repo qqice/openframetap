@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 from urllib.parse import urlsplit, urlunsplit
 
@@ -18,6 +19,22 @@ from openframetap.video.latency import StartupTimeline, parse_latency_tracer
 from openframetap.video.metrics import ProcessMetrics, summarize_metrics
 from openframetap.video.pipelines import PipelineSpec
 from openframetap.video.player_process import ProcessRegistry
+
+
+def _linux_parent_death_signal() -> None:
+    """Terminate gst-launch if the SSH-owned Python parent disappears."""
+
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+    import signal
+
+    parent = os.getppid()
+    libc = ctypes.CDLL(None)
+    if libc.prctl(1, signal.SIGTERM) != 0:
+        os._exit(127)
+    if os.getppid() != parent:
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 def _sha256(path: Path) -> str:
@@ -91,7 +108,12 @@ def run_preview(
     runtime_argv.insert(2, "-v")
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
-            runtime_argv, stdout=log, stderr=subprocess.STDOUT, text=True, env=env
+            runtime_argv,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            preexec_fn=_linux_parent_death_signal if sys.platform.startswith("linux") else None,
         )
         timeline.process_started_ns = time.monotonic_ns()
         registry.register("preview", process, runtime_argv)

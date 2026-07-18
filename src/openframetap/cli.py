@@ -439,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
 
         registry = ProcessRegistry(Path("runtime/media-processes.json"))
         if args.video_command in {"preview-status", "media-status"}:
-            payload = {name: item.to_dict() for name, item in registry.load().items()}
+            payload = {name: item.to_public_dict() for name, item in registry.load().items()}
         elif args.video_command == "preview-stop":
             payload = {"stopped": registry.stop("preview")}
         else:

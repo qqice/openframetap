@@ -9,10 +9,25 @@ from pathlib import Path
 import signal
 import subprocess
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 
 def _current_uid() -> int:
     return os.getuid() if hasattr(os, "getuid") else 0
+
+
+def redact_argv(argv: list[str]) -> list[str]:
+    rendered = []
+    for item in argv:
+        prefix = "location=" if item.startswith("location=") else ""
+        value = item[len(prefix) :]
+        if value.startswith(("rtmp://", "rtsp://")):
+            parsed = urlsplit(value)
+            parts = [part for part in parsed.path.split("/") if part]
+            path = f"/{parts[0]}/<redacted>" if parts else "/<redacted>"
+            value = urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+        rendered.append(prefix + value)
+    return rendered
 
 
 @dataclass(slots=True)
@@ -25,6 +40,11 @@ class OwnedProcess:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def to_public_dict(self) -> dict:
+        payload = self.to_dict()
+        payload["argv"] = redact_argv(self.argv)
+        return payload
 
 
 def _pid_alive(pid: int) -> bool:
@@ -60,12 +80,16 @@ class ProcessRegistry:
             + "\n",
             encoding="utf-8",
         )
+        if os.name != "nt":
+            self.path.chmod(0o600)
 
     def register(self, name: str, process: subprocess.Popen, argv: list[str]) -> OwnedProcess:
         processes = self.load()
         if name in processes:
             raise RuntimeError(f"owned process already running: {name}")
-        owned = OwnedProcess(name, process.pid, argv, time.monotonic_ns(), _current_uid())
+        owned = OwnedProcess(
+            name, process.pid, redact_argv(argv), time.monotonic_ns(), _current_uid()
+        )
         processes[name] = owned
         self.save(processes)
         return owned
