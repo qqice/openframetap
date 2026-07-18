@@ -14,6 +14,7 @@ from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.livestream_commands import (
     LIVESTREAM_COMMANDS,
     build_prepare_to_live_stream_frame,
+    build_prepare_stream_stage2_frame,
     build_wifi_connect_frame,
 )
 
@@ -316,6 +317,144 @@ def write_wifi_proposal(
     )
     (sanitized_dir / "proposal.sha256").write_text(
         f"{digest}  private-proposal-frame\n", encoding="ascii"
+    )
+    return {
+        **sanitized,
+        "private_proposal": str(private_json),
+        "sanitized_proposal": str(sanitized_json),
+    }
+
+
+def write_prepare_recovery_proposal(
+    *,
+    address: str,
+    private_root: Path,
+    sanitized_root: Path,
+    wifi_result_sha256: str,
+) -> dict:
+    """Propose a two-prompt same-connection prepare recovery; never send it."""
+
+    stage1_command = LIVESTREAM_COMMANDS["prepare_to_live_stream"]
+    stage2_command = LIVESTREAM_COMMANDS["prepare_stream_transport"]
+    stage1 = build_prepare_to_live_stream_frame(sequence=0xFEAB)
+    stage2 = build_prepare_stream_stage2_frame(sequence=0xFFAB)
+    decoded1 = decode_duml_frame(stage1)
+    decoded2 = decode_duml_frame(stage2)
+    for command, decoded, raw in (
+        (stage1_command, decoded1, stage1),
+        (stage2_command, decoded2, stage2),
+    ):
+        validate_command_frame(command, decoded)
+        if not decoded.crc8_valid or not decoded.crc16_valid or decoded.raw != raw:
+            raise RuntimeError("offline prepare-recovery round-trip validation failed")
+    stage1_sha = hashlib.sha256(stage1).hexdigest()
+    stage2_sha = hashlib.sha256(stage2).hexdigest()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    private_dir = require_private_directory(private_root / f"prepare-recovery-{stamp}")
+    sanitized_dir = (sanitized_root / f"prepare-recovery-{stamp}").resolve()
+    if "sanitized" not in {part.lower() for part in sanitized_dir.parts}:
+        raise ValueError("sanitized recovery proposal must be under artifacts/sanitized")
+    sanitized_dir.mkdir(parents=True, exist_ok=True)
+    stages = [
+        {
+            "stage": "prepare_reentry",
+            "command": stage1_command.name,
+            "frame_hex": stage1.hex(),
+            "frame_sha256": stage1_sha,
+            "decoded": decoded1.to_dict(),
+            "expected_response": "same-sequence C0/02/E1 payload 00",
+            "max_send_count": 1,
+        },
+        {
+            "stage": "prepare_stream_stage2",
+            "command": stage2_command.name,
+            "frame_hex": stage2.hex(),
+            "frame_sha256": stage2_sha,
+            "decoded": decoded2.to_dict(),
+            "expected_response": (
+                "same-sequence 80/02/8E payload beginning 0000011C00 "
+                "as recorded in the public Pocket 3 Mimo capture"
+            ),
+            "max_send_count": 1,
+            "conditional_on_stage1_ack": True,
+        },
+    ]
+    private_payload = {
+        "schema_version": 1,
+        "proposal_type": "prepare_recovery_same_connection",
+        "target_address": address,
+        "automatic_retry": False,
+        "automatic_follow_up": False,
+        "human_confirmation_required_per_frame": True,
+        "wifi_retry_included": False,
+        "evidence": {"prior_wifi_result_sha256": wifi_result_sha256},
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "stages": stages,
+    }
+    private_json = private_dir / "proposal-private.json"
+    _write_private(
+        private_json,
+        (json.dumps(private_payload, indent=2, ensure_ascii=False) + "\n").encode(),
+    )
+    _write_private(private_dir / "stage1.bin", stage1)
+    _write_private(private_dir / "stage2.bin", stage2)
+    sanitized_stages = []
+    for command, decoded, raw, stage in (
+        (stage1_command, decoded1, stage1, stages[0]),
+        (stage2_command, decoded2, stage2, stages[1]),
+    ):
+        sanitized_stages.append(
+            {
+                "stage": stage["stage"],
+                "command": command.name,
+                "source_component": f"0x{command.sender:02X}",
+                "target_component": f"0x{command.receiver:02X}",
+                "sequence": f"0x{decoded.sequence:04X}",
+                "flags": f"0x{decoded.flags:02X}",
+                "cmd_set": f"0x{command.cmd_set:02X}",
+                "cmd_id": f"0x{command.cmd_id:02X}",
+                "payload_hex": decoded.payload.hex(),
+                "frame_hex": raw.hex(),
+                "frame_sha256": stage["frame_sha256"],
+                "total_length": decoded.total_length,
+                "crc8_valid": decoded.crc8_valid,
+                "crc16_valid": decoded.crc16_valid,
+                "round_trip_valid": decoded.raw == raw,
+                "expected_response": stage["expected_response"],
+                "reference_sources": list(command.reference_sources),
+                "confidence": command.confidence,
+                "max_send_count": 1,
+                "conditional_on_stage1_ack": stage.get(
+                    "conditional_on_stage1_ack", False
+                ),
+                "locally_sent": False,
+            }
+        )
+    sanitized = {
+        "schema_version": 1,
+        "proposal_type": "prepare_recovery_same_connection",
+        "target_address_masked": _mask_address(address),
+        "target_address_sha256": hashlib.sha256(address.upper().encode()).hexdigest(),
+        "automatic_retry": False,
+        "automatic_follow_up": False,
+        "human_confirmation_required_per_frame": True,
+        "wifi_retry_included": False,
+        "locally_sent": False,
+        "evidence": {"prior_wifi_result_sha256": wifi_result_sha256},
+        "diagnosis": (
+            "stage2 is present in djictl and a public Pocket 3 Mimo capture but "
+            "absent from the earlier OpenFrameTap sequence"
+        ),
+        "risk": "stage2 may enter or alter the Pocket livestream-preparation state",
+        "stages": sanitized_stages,
+    }
+    sanitized_json = sanitized_dir / "proposal.json"
+    sanitized_json.write_text(
+        json.dumps(sanitized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (sanitized_dir / "checksums.sha256").write_text(
+        f"{stage1_sha}  stage1-frame\n{stage2_sha}  stage2-frame\n",
+        encoding="ascii",
     )
     return {
         **sanitized,

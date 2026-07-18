@@ -194,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
     )
     rtmp_propose = rtmp_commands.add_parser("propose", help="generate one offline proposal")
-    rtmp_propose.add_argument("stage", choices=("prepare", "wifi"))
+    rtmp_propose.add_argument("stage", choices=("prepare", "wifi", "prepare-recovery"))
     rtmp_propose.add_argument(
         "--address",
         default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
@@ -209,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     rtmp_propose.add_argument("--pairing-evidence")
     rtmp_propose.add_argument("--secret-file", type=Path)
     rtmp_propose.add_argument("--prepare-result", type=Path)
+    rtmp_propose.add_argument("--wifi-result", type=Path)
     rtmp_propose.add_argument(
         "--state-file",
         type=Path,
@@ -548,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
         from openframetap.devices.pocket3_livestream import (
             load_fixed_proposal,
             load_fixed_wifi_proposal,
+            write_prepare_recovery_proposal,
             write_prepare_proposal,
             write_wifi_proposal,
         )
@@ -707,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
                         "locally_sent": False,
                     },
                 )
-            else:
+            elif args.stage == "wifi":
                 if workflow.phase != "prepare_acknowledged":
                     print(
                         "REFUSED: Wi-Fi proposal requires prepare_acknowledged state, "
@@ -744,7 +746,36 @@ def main(argv: list[str] | None = None) -> int:
                         "contains_sensitive_data": True,
                     },
                 )
-            workflow.save(args.state_file)
+                workflow.save(args.state_file)
+            else:
+                if workflow.phase != "wifi_connected_or_unknown":
+                    print(
+                        "REFUSED: prepare recovery requires wifi_connected_or_unknown "
+                        f"state, found {workflow.phase}"
+                    )
+                    return 4
+                if args.wifi_result is None:
+                    raise SystemExit("prepare-recovery requires --wifi-result")
+                wifi_result = json.loads(args.wifi_result.read_text(encoding="utf-8"))
+                if (
+                    wifi_result.get("status") != "no_protocol_response_observed"
+                    or wifi_result.get("matching_sequence_response_count") != 0
+                    or wifi_result.get("application_frames_written") != 1
+                ):
+                    raise SystemExit(
+                        "--wifi-result does not contain the validated no-response result"
+                    )
+                import hashlib
+
+                wifi_result_sha = hashlib.sha256(args.wifi_result.read_bytes()).hexdigest()
+                payload = write_prepare_recovery_proposal(
+                    address=args.address,
+                    private_root=args.private_root,
+                    sanitized_root=args.sanitized_root,
+                    wifi_result_sha256=wifi_result_sha,
+                )
+            if args.stage == "prepare":
+                workflow.save(args.state_file)
             safe = {key: value for key, value in payload.items() if key != "private_proposal"}
             safe["private_proposal"] = "artifacts/private/<redacted-proposal-path>"
             print(json.dumps(safe, indent=2, ensure_ascii=False))

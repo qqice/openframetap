@@ -201,6 +201,11 @@ def validate_command_frame(command: CommandDefinition, frame) -> None:
     elif command.name == "prepare_to_live_stream":
         if frame.flags != 0x40 or frame.payload != b"\x1A":
             raise CommandRejected("prepare_to_live_stream must be 4002E1 with payload 1A")
+    elif command.name == "prepare_stream_transport":
+        if frame.flags != 0x40 or frame.payload != b"\x00\x01\x1C\x00":
+            raise CommandRejected(
+                "prepare_stream_transport must be 40028E with payload 00011C00"
+            )
     elif command.name == "wifi_connect":
         payload = frame.payload
         if len(payload) < 4:

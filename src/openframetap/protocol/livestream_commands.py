@@ -147,3 +147,18 @@ def build_wifi_connect_frame(
         cmd_id=command.cmd_id,
         payload=payload,
     )
+
+
+def build_prepare_stream_stage2_frame(*, sequence: int = 0xFFAB) -> bytes:
+    """Build the Mimo-captured prepare stage2 frame; this does not authorize it."""
+
+    command = LIVESTREAM_COMMANDS["prepare_stream_transport"]
+    return encode_duml_frame(
+        sender=command.sender,
+        receiver=command.receiver,
+        sequence=sequence,
+        flags=0x40,
+        cmd_set=command.cmd_set,
+        cmd_id=command.cmd_id,
+        payload=bytes.fromhex("00011c00"),
+    )

@@ -10,6 +10,7 @@ import pytest
 from openframetap.devices.pocket3_livestream import (
     load_fixed_proposal,
     load_fixed_wifi_proposal,
+    write_prepare_recovery_proposal,
     write_prepare_proposal,
     write_wifi_proposal,
 )
@@ -24,6 +25,7 @@ from openframetap.protocol.commands import (
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.livestream_commands import (
     build_prepare_to_live_stream_frame,
+    build_prepare_stream_stage2_frame,
     build_wifi_connect_frame,
 )
 from openframetap.workflows.pocket3_rtmp import Pocket3RtmpWorkflow
@@ -55,6 +57,29 @@ def test_prepare_frame_round_trip_and_allowlist() -> None:
     with pytest.raises(CommandRejected):
         assert_send_allowed(
             get_command_definition("wifi_connect"), authorization
+        )
+
+
+def test_prepare_stage2_matches_public_pocket3_mimo_capture_and_stays_denied() -> None:
+    raw = build_prepare_stream_stage2_frame()
+    assert raw.hex() == "551104920208ffab40028e00011c003bc8"
+    decoded = decode_duml_frame(raw)
+    assert decoded.crc8_valid and decoded.crc16_valid
+    assert (decoded.sender, decoded.receiver, decoded.sequence) == (2, 8, 0xFFAB)
+    assert (decoded.flags, decoded.cmd_set, decoded.cmd_id, decoded.payload) == (
+        0x40,
+        0x02,
+        0x8E,
+        bytes.fromhex("00011c00"),
+    )
+    command = get_command_definition("prepare_stream_transport")
+    validate_command_frame(command, decoded)
+    with pytest.raises(CommandRejected, match="denied"):
+        assert_send_allowed(
+            command,
+            SendAuthorization.single_command(
+                command.name, purpose="fixture", approval_reference="fixture"
+            ),
         )
 
 
@@ -179,6 +204,28 @@ def test_wifi_proposal_loader_rejects_tampered_fingerprint(tmp_path: Path) -> No
     path.write_text(json.dumps(private), encoding="utf-8")
     with pytest.raises(PermissionError, match="fingerprints"):
         load_fixed_wifi_proposal(path, expected_address=ADDRESS)
+
+
+def test_prepare_recovery_proposal_requires_two_human_confirmed_frames(
+    tmp_path: Path,
+) -> None:
+    payload = write_prepare_recovery_proposal(
+        address=ADDRESS,
+        private_root=tmp_path / "artifacts" / "private" / "proposals",
+        sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
+        wifi_result_sha256="4" * 64,
+    )
+    assert payload["automatic_retry"] is False
+    assert payload["automatic_follow_up"] is False
+    assert payload["human_confirmation_required_per_frame"] is True
+    assert payload["wifi_retry_included"] is False
+    stage1, stage2 = payload["stages"]
+    assert stage1["frame_sha256"] == hashlib.sha256(
+        bytes.fromhex(stage1["frame_hex"])
+    ).hexdigest()
+    assert stage2["frame_hex"] == "551104920208ffab40028e00011c003bc8"
+    assert stage2["conditional_on_stage1_ack"] is True
+    assert stage1["locally_sent"] is False and stage2["locally_sent"] is False
 
 
 def test_wifi_proposal_cli_is_offline_and_stdout_is_sanitized(
