@@ -90,6 +90,7 @@ python -m openframetap video server doctor
 python -m openframetap pocket3 rtmp plan
 python -m openframetap pocket3 rtmp status
 python -m openframetap pocket3 rtmp analyze-prepare <private-capture-directory> --sanitized-output <sanitized-directory>
+python -m openframetap pocket3 rtmp analyze-wifi <private-capture-directory> --sanitized-output <sanitized-directory>
 python -m openframetap pocket3 rtmp propose wifi --secret-file <private-0600-file> --prepare-result <validated-result>
 ```
 

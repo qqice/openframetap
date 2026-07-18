@@ -227,6 +227,40 @@ start, `02/8E`, stop, retry, or any other command.
   30 seconds, and records private btmon/notification/DUML evidence. It sends no
   response, retry, RTMP configuration, `02/8E`, start, or stop command.
 
+## Wi-Fi send result
+
+- 【实机事实】The owner executed the fixed B-class wrapper once. OpenFrameTap
+  recorded one approved application frame, SHA-256
+  `8751117a3022d1a0057a4d6ea1ef38505314d1d75995fd4d46fc8d85e25ed72e`.
+  No retry or automatic follow-up application frame was sent.
+- 【实机事实】Bleak exposed its conservative default MTU 23 during this session,
+  so the 45-byte application frame was emitted as three ATT Write Commands.
+  This is transport fragmentation of one approved DUML frame, not three
+  application commands.
+- 【实机事实】The 33.070-second session received 1,187 notifications and 1,187
+  valid DUML frames with zero CRC, reassembly, or active-session interruption.
+  Three setup disconnect callbacks occurred before the final connection; the
+  connection remained stable after subscription and the Wi-Fi write.
+- 【实机事实】No frame used sequence `0x8C19`; no frame came from component
+  `0x07`; and no ACK-flagged frame was captured. Consequently there is no
+  matching `C0/07/47` response or explicit result payload to interpret.
+- 【统计观察】The ordinary telemetry families continued at their normal rates
+  for 30 seconds after the write. No high-confidence Wi-Fi association field
+  has yet been identified in those messages.
+- 【捕获推断】Continued BLE telemetry proves that the Pocket remained available
+  over BLE; it does not prove or disprove association with the external Wi-Fi.
+- 【待验证假设】The Pocket may have joined the requested network without a DUML
+  response, or it may have ignored/failed the request. No current evidence
+  distinguishes these cases.
+- 【实机事实】The persisted workflow is `wifi_connected_or_unknown`. OpenFrameTap
+  will not retry `07/47` and will not generate `08/78` or `02/8E` from this
+  ambiguous result.
+
+Private evidence is under `pocket3-rtmp-wifi-20260719-014412`; sanitized
+offline analysis uses the same-named directory under `artifacts/sanitized`.
+The analyzer verified the original checksum manifest and confirmed that raw
+credential-bearing evidence was unchanged.
+
 ## Secret and failure boundary
 
 - 【实机事实】No NetworkManager secret/keyring/connection file was inspected.
