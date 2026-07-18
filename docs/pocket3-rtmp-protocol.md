@@ -181,6 +181,35 @@ and a sanitized structure containing only the SSID mask/hash, PSK length/hash,
 field lengths, frame hash and CRC results. Proposal generation performs no BLE
 connection or write and cannot authorize itself.
 
+## Wi-Fi proposal and authorization point
+
+- 【实机事实】The owner-created remote secrets file is a regular non-symlink
+  file owned by `qqice` with mode `0600`. Terminal capture contains prompts and
+  completion status only; it does not contain the entered SSID or PSK.
+- 【实机事实】The proposed SSID SHA-256 equals the live ROCK `wlan0` association
+  SSID SHA-256. The current ROCK link frequency is `5745 MHz`, confirming that
+  this is the existing external 5GHz network without changing NetworkManager.
+- 【实机事实】The private proposal is 45 bytes with a 32-byte payload: a
+  15-byte SSID and 15-byte PSK, each preceded by its one-byte length. No secret
+  value, private payload, or full frame appears in the sanitized proposal.
+- 【实机事实】The candidate decodes as sender `0x02`, receiver `0x07`, sequence
+  `0x8C19`, flags `0x40`, command `07/47`. CRC8, CRC16 and byte-for-byte
+  round-trip all validate. Its frame SHA-256 is
+  `8751117a3022d1a0057a4d6ea1ef38505314d1d75995fd4d46fc8d85e25ed72e`.
+- 【实机事实】The workflow is `wifi_proposed`; `locally_sent=false`, maximum
+  send count is one, automatic retry is false, and automatic follow-up is
+  false. Proposal creation did not start a BLE connection or FFF5 sender.
+- 【待验证假设】The request will instruct Pocket to join that external network.
+  A matching `C0/07/47` response must be captured and reported verbatim; the
+  current public two-byte/three-byte success-payload conflict prevents an
+  automatic success transition.
+
+Private proposal evidence is under `artifacts/private/proposals/` with stem
+`wifi-20260718T173350Z`; the corresponding sanitized proposal uses the same
+stem. This B-class command is still unsent and requires its own owner approval.
+Approval would cover only this exact frame SHA-256, not RTMP configuration,
+start, `02/8E`, stop, retry, or any other command.
+
 ## Secret and failure boundary
 
 - 【实机事实】No NetworkManager secret/keyring/connection file was inspected.

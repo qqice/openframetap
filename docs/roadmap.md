@@ -3,7 +3,7 @@
 1. **Completed:** local/remote workflow, ROCK 4D wireless/media/display audit, passive BLE capture, and metadata-only GATT enumeration.
 2. **Completed for the current evidence boundary:** owner-confirmed Pocket 3 application pairing, explicit `already_paired` response, passive state capture, and conservative device/battery/gimbal candidates.
 3. **Completed for one controlled session:** a structured FFF4-only body-motion experiment with ROCK 4D event markers, exact screen correlation for the `0D/02` battery candidate, and provenance-preserving `04/05` yaw/pitch/roll candidates. Exact angle scales and remaining status semantics require an independent passive replication.
-4. **Current, prepare acknowledged:** the LAN-only user-space RTMP receiver and local publish/readback test are complete. The owner sent `02/E1` once and the Pocket returned the exact expected matching-sequence ACK. The next boundary is an offline, private Wi-Fi proposal after the owner supplies dedicated test-network credentials; `07/47` remains unsent and unauthorized.
+4. **Current, Wi-Fi proposal gated:** the LAN-only user-space RTMP receiver and local publish/readback test are complete, and `02/E1` is hardware-acknowledged. A private `07/47` candidate for the same verified 5GHz SSID has passed offline validation; it remains unsent pending its own B-class authorization.
 5. Validate streams with `ffprobe` and short samples, then test RK3576 MPP/V4L2 decode on the existing DSI display.
 6. Add tightly bounded gimbal telemetry/recenter/low-speed control with zeroing and heartbeat fail-safe.
 7. Add separate Pocket 4 and Pocket 4P profiles for identity, pairing, live payloads, and controls.
