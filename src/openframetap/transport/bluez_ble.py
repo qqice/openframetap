@@ -78,6 +78,9 @@ class BluezBleTransport:
         self._write_characteristic = None
         self._subscribed = False
         self._disconnect_count = 0
+        self._active_disconnect_count = 0
+        self._setup_disconnect_count = 0
+        self._disconnect_requested = False
 
     @property
     def is_connected(self) -> bool:
@@ -94,6 +97,14 @@ class BluezBleTransport:
     def disconnect_count(self) -> int:
         return self._disconnect_count
 
+    @property
+    def active_disconnect_count(self) -> int:
+        return self._active_disconnect_count
+
+    @property
+    def setup_disconnect_count(self) -> int:
+        return self._setup_disconnect_count
+
     async def connect(self) -> None:
         try:
             from bleak import BleakClient
@@ -101,13 +112,21 @@ class BluezBleTransport:
             raise RuntimeError("bleak is not installed in the runtime virtualenv") from exc
 
         def disconnected(_client) -> None:
-            self._disconnect_count += 1
+            intentional = self._disconnect_requested
+            if not intentional:
+                self._disconnect_count += 1
+                if self._subscribed:
+                    self._active_disconnect_count += 1
+                else:
+                    self._setup_disconnect_count += 1
             self.event_handler(
                 {
                     "wall_timestamp": utc_now(),
                     "monotonic_ns": time.monotonic_ns(),
                     "event": "disconnected_callback",
                     "address": self.address,
+                    "intentional": intentional,
+                    "session_phase": "active_listen" if self._subscribed else "setup_or_teardown",
                 }
             )
 
@@ -240,6 +259,7 @@ class BluezBleTransport:
                 await self._client.stop_notify(self._notification_characteristic)
                 self._subscribed = False
             if self._client.is_connected:
+                self._disconnect_requested = True
                 await self._client.disconnect()
         finally:
             self.event_handler(

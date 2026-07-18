@@ -48,7 +48,9 @@ async def listen_pocket3(
             error = f"{error}; disconnect: {disconnect_error}" if error else disconnect_error
         summary = recorder.finalize(
             actual_seconds=actual_seconds,
-            disconnect_count=transport.disconnect_count,
+            disconnect_count=transport.active_disconnect_count,
+            setup_disconnect_count=transport.setup_disconnect_count,
+            unintentional_disconnect_callbacks_total=transport.disconnect_count,
             connected=connected_at_end,
             error=error,
         )

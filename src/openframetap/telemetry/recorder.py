@@ -88,6 +88,8 @@ class TelemetryRecorder:
         actual_seconds: float,
         disconnect_count: int,
         connected: bool,
+        setup_disconnect_count: int = 0,
+        unintentional_disconnect_callbacks_total: int | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
         for event in self.reassembler.finish():
@@ -116,6 +118,12 @@ class TelemetryRecorder:
             "parsed_message_types": dict(sorted(self.parsed_counts.items())),
             "unknown_message_types": dict(sorted(self.unknown_counts.items())),
             "connection_interruptions": disconnect_count,
+            "connection_setup_disconnects": setup_disconnect_count,
+            "unintentional_disconnect_callbacks_total": (
+                disconnect_count + setup_disconnect_count
+                if unintentional_disconnect_callbacks_total is None
+                else unintentional_disconnect_callbacks_total
+            ),
             "writes_attempted": 0,
             "pairing_requested": False,
             "error": error,

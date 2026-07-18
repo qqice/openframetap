@@ -1,0 +1,37 @@
+{
+  "fixture_schema": 1,
+  "source": {
+    "capture_directory": "artifacts/remote/pocket3-listen-20260718-182046",
+    "source_file": "duml-frames.jsonl",
+    "source_sha256": "62f21ad11db8bb9894a655ed03a6f685d23c3b203a5c29302ab8b290ef3860e1",
+    "direction": "Pocket-to-OpenFrameTap FFF4 notification",
+    "write_attempted": false,
+    "pairing_requested": false
+  },
+  "frames": [
+    {
+      "name": "live_gimbal_status_candidate",
+      "wall_timestamp": "2026-07-18T10:20:48.231489+00:00",
+      "monotonic_ns": 2038559337157,
+      "source_notification_index": 1,
+      "hex": "553e044b040223490004050cf9000003008000feff00019d701e0037bf00000d0000008df20e3b4c037ebfb915fcbd0af48fbc000000000100000000a765",
+      "expected_type": "gimbal_status_candidate"
+    },
+    {
+      "name": "live_device_info_candidate",
+      "wall_timestamp": "2026-07-18T10:20:48.753283+00:00",
+      "monotonic_ns": 2039081114777,
+      "source_notification_index": 25,
+      "hex": "554d04a84802c80c4000816867323132000000000000000000000000000000000000000000000000000000020800000000000002080000000000000000000000000000000000000000000055ec",
+      "expected_type": "device_info_candidate"
+    },
+    {
+      "name": "live_battery_status_candidate",
+      "wall_timestamp": "2026-07-18T10:20:48.990942+00:00",
+      "monotonic_ns": 2039318782290,
+      "source_notification_index": 33,
+      "hex": "552f04630502bc07000d02000e110000000000000000000000000000680100640000000000002004000000000192b1",
+      "expected_type": "battery_status_candidate"
+    }
+  ]
+}

@@ -94,6 +94,7 @@ def test_scanner_failure_cleans_up_btmon(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["OPENFRAMETAP_BTMON_BIN"] = shell_path(ROOT / "tests/fixtures/fake-btmon.sh")
     env["OPENFRAMETAP_PYTHON_BIN"] = shell_path(ROOT / "tests/fixtures/fail-python.sh")
+    env["OPENFRAMETAP_BTMON_USE_SUDO"] = "0"
     env["BTMON_START_FILE"] = shell_path(start_file)
     env["BTMON_STOP_FILE"] = shell_path(stop_file)
     env["FAKE_PYTHON_STATUS"] = "23"
@@ -118,6 +119,7 @@ def test_ctrl_c_path_cleans_up_btmon(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["OPENFRAMETAP_BTMON_BIN"] = shell_path(ROOT / "tests/fixtures/fake-btmon.sh")
     env["OPENFRAMETAP_PYTHON_BIN"] = shell_path(ROOT / "tests/fixtures/interrupt-python.sh")
+    env["OPENFRAMETAP_BTMON_USE_SUDO"] = "0"
     env["BTMON_START_FILE"] = shell_path(start_file)
     env["BTMON_STOP_FILE"] = shell_path(stop_file)
     result = subprocess.run(
@@ -140,6 +142,7 @@ def test_pocket_listener_failure_cleans_up_btmon(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["OPENFRAMETAP_BTMON_BIN"] = shell_path(ROOT / "tests/fixtures/fake-btmon.sh")
     env["OPENFRAMETAP_PYTHON_BIN"] = shell_path(ROOT / "tests/fixtures/fail-python.sh")
+    env["OPENFRAMETAP_BTMON_USE_SUDO"] = "0"
     env["BTMON_START_FILE"] = shell_path(start_file)
     env["BTMON_STOP_FILE"] = shell_path(stop_file)
     env["FAKE_PYTHON_STATUS"] = "29"
