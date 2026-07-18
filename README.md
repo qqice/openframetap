@@ -1,6 +1,6 @@
 # OpenFrameTap
 
-OpenFrameTap is an open-source remote monitoring and control terminal prototype for DJI Osmo Pocket cameras. The current milestone includes a tested DJI DUML codec, streaming frame reassembly, passive `FFF4` notification capture, conservative telemetry recording, hardware-validated Pocket 3 application pairing, controlled passive telemetry experiments, and a LAN-only user-space RTMP receiver. Pocket livestream commands remain proposal-only and independently user-gated.
+OpenFrameTap is an open-source remote monitoring and control terminal prototype for DJI Osmo Pocket cameras. The current milestone includes a tested DJI DUML codec, passive telemetry, hardware-validated Pocket 3 application pairing, a fixed fail-closed livestream workflow, LAN-only RTMP ingest, RK3576 MPP hardware decoding, and fullscreen preview on the existing DSI display.
 
 The Git repository on the local computer is the only source of truth. Files are deployed through SSH to `~/openframetap-runtime` on the ROCK 4D, while all remote evidence is copied back to ignored local `artifacts/remote/` directories.
 
@@ -38,6 +38,15 @@ Run POSIX scripts from Git Bash on Windows. Set `ROCK4D_SSH_HOST` when the defau
 ./scripts/remote.sh rtmp-status
 ./scripts/remote.sh rtmp-stop
 ./scripts/remote.sh rtmp-self-test
+./scripts/remote.sh video-doctor
+./scripts/remote.sh display-doctor
+./scripts/remote.sh video-benchmark
+./scripts/remote.sh preview-file
+./scripts/remote.sh live-preview 120
+./scripts/remote.sh preview-status
+./scripts/remote.sh preview-stop
+./scripts/remote.sh media-status
+./scripts/remote.sh media-stop-all
 ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
 ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
 ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
@@ -95,4 +104,4 @@ python -m openframetap pocket3 rtmp propose wifi --secret-file <private-0600-fil
 python -m openframetap pocket3 rtmp propose prepare-recovery --wifi-result <validated-no-response-result>
 ```
 
-See [architecture](docs/architecture.md), [Pocket 3 RTMP protocol](docs/pocket3-rtmp-protocol.md), [telemetry experiment](docs/telemetry-experiment.md), [manual pairing](docs/manual-pairing.md), [reference matrix](docs/reference-matrix.md), [hardware audit](docs/hardware-audit.md), [display baseline](docs/display-baseline.md), [protocol notes](docs/protocol-notes.md), and [roadmap](docs/roadmap.md).
+See [video pipeline validation](docs/video-pipeline.md), [architecture](docs/architecture.md), [Pocket 3 RTMP protocol](docs/pocket3-rtmp-protocol.md), [telemetry experiment](docs/telemetry-experiment.md), [manual pairing](docs/manual-pairing.md), [reference matrix](docs/reference-matrix.md), [hardware audit](docs/hardware-audit.md), [display baseline](docs/display-baseline.md), [protocol notes](docs/protocol-notes.md), and [roadmap](docs/roadmap.md).
