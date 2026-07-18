@@ -51,6 +51,19 @@ class SendAuthorization:
             approved_at=datetime.now(timezone.utc).isoformat(),
         )
 
+    @classmethod
+    def single_command(
+        cls, command_name: str, *, purpose: str, approval_reference: str
+    ) -> "SendAuthorization":
+        if not command_name.strip() or not purpose.strip() or not approval_reference.strip():
+            raise ValueError("single-command authorization fields cannot be empty")
+        return cls(
+            allowed_command_names=frozenset({command_name}),
+            purpose=purpose,
+            approval_reference=approval_reference,
+            approved_at=datetime.now(timezone.utc).isoformat(),
+        )
+
 
 PAIRING_COMMANDS = {
     "set_pairing_pin": CommandDefinition(
@@ -133,6 +146,17 @@ DANGEROUS_COMMANDS = {
 COMMANDS_BY_NAME = {**PAIRING_COMMANDS, **DANGEROUS_COMMANDS}
 
 
+def get_command_definition(name: str) -> CommandDefinition:
+    if name in COMMANDS_BY_NAME:
+        return COMMANDS_BY_NAME[name]
+    from openframetap.protocol.livestream_commands import LIVESTREAM_COMMANDS
+
+    try:
+        return LIVESTREAM_COMMANDS[name]
+    except KeyError as exc:
+        raise KeyError(name) from exc
+
+
 def assert_send_allowed(command: CommandDefinition, authorization: SendAuthorization | None) -> None:
     """Fail closed: no authorization means no characteristic write."""
 
@@ -174,3 +198,17 @@ def validate_command_frame(command: CommandDefinition, frame) -> None:
     elif command.name == "pairing_stage2":
         if frame.flags != 0x40 or frame.payload != b"11\x00\x00\x00":
             raise CommandRejected("pairing_stage2 must be 400032 with payload 3131000000")
+    elif command.name == "prepare_to_live_stream":
+        if frame.flags != 0x40 or frame.payload != b"\x1A":
+            raise CommandRejected("prepare_to_live_stream must be 4002E1 with payload 1A")
+    elif command.name == "wifi_connect":
+        payload = frame.payload
+        if len(payload) < 4:
+            raise CommandRejected("wifi_connect packed-string payload is truncated")
+        ssid_length = payload[0]
+        psk_length_offset = 1 + ssid_length
+        if ssid_length == 0 or psk_length_offset >= len(payload):
+            raise CommandRejected("wifi_connect SSID packing is invalid")
+        psk_length = payload[psk_length_offset]
+        if psk_length_offset + 1 + psk_length != len(payload) or not 8 <= psk_length <= 63:
+            raise CommandRejected("wifi_connect PSK packing or length is invalid")

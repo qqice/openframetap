@@ -12,10 +12,10 @@ from typing import Callable
 
 from openframetap.devices.pocket3 import POCKET3_PROFILE
 from openframetap.protocol.commands import (
-    COMMANDS_BY_NAME,
     SendAuthorization,
     assert_send_allowed,
     validate_command_frame,
+    get_command_definition,
 )
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.reassembly import DumlStreamReassembler
@@ -95,14 +95,16 @@ async def manual_send_pocket3_frame(
     if confirmed_sha256.lower() != digest:
         raise PermissionError("manual confirmation SHA-256 does not match the frame")
     try:
-        command = COMMANDS_BY_NAME[command_name]
+        command = get_command_definition(command_name)
     except KeyError as exc:
         raise ValueError(f"unknown command definition: {command_name}") from exc
     decoded = decode_duml_frame(raw)
     if not (decoded.crc8_valid and decoded.crc16_valid):
         raise ValueError("candidate frame CRC validation failed")
-    authorization = SendAuthorization.pairing(
-        approval_reference=f"manual-frame-sha256:{digest}"
+    authorization = SendAuthorization.single_command(
+        command_name,
+        purpose="one fixed user-confirmed DUML proposal",
+        approval_reference=f"manual-frame-sha256:{digest}",
     )
     assert_send_allowed(command, authorization)
     expected = (command.sender, command.receiver, command.cmd_set, command.cmd_id)

@@ -184,6 +184,58 @@ def build_parser() -> argparse.ArgumentParser:
             "POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address
         ),
     )
+    rtmp = pocket3_commands.add_parser("rtmp", help="human-gated Pocket 3 RTMP workflow")
+    rtmp_commands = rtmp.add_subparsers(dest="rtmp_command", required=True)
+    rtmp_commands.add_parser("plan", help="show the fail-closed persistent workflow")
+    rtmp_status = rtmp_commands.add_parser("status", help="show persisted workflow state")
+    rtmp_status.add_argument(
+        "--state-file",
+        type=Path,
+        default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
+    )
+    rtmp_propose = rtmp_commands.add_parser("propose", help="generate one offline proposal")
+    rtmp_propose.add_argument("stage", choices=("prepare",))
+    rtmp_propose.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    rtmp_propose.add_argument(
+        "--private-root", type=Path, default=Path("artifacts/private/proposals")
+    )
+    rtmp_propose.add_argument(
+        "--sanitized-root", type=Path, default=Path("artifacts/sanitized/proposals")
+    )
+    rtmp_propose.add_argument("--server-evidence-sha256", required=True)
+    rtmp_propose.add_argument("--pairing-evidence", required=True)
+    rtmp_propose.add_argument(
+        "--state-file",
+        type=Path,
+        default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
+    )
+    rtmp_send = rtmp_commands.add_parser(
+        "send-approved", help="send one fixed proposal after full-SHA owner confirmation"
+    )
+    rtmp_send.add_argument("proposal", type=Path)
+    rtmp_send.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    rtmp_send.add_argument("--seconds", type=int, default=15)
+    rtmp_send.add_argument("--output-dir", type=Path, required=True)
+    rtmp_send.add_argument(
+        "--state-file",
+        type=Path,
+        default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
+    )
+    rtmp_observe = rtmp_commands.add_parser(
+        "observe", help="passively observe FFF4 without a DJI query"
+    )
+    rtmp_observe.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    rtmp_observe.add_argument("--seconds", type=int, default=30)
+    rtmp_observe.add_argument("--output-dir", type=Path, required=True)
     return parser
 
 
@@ -428,4 +480,122 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps({"output_dir": str(args.output), "session": payload}, indent=2))
         return 0 if ok else 1
+    if args.command == "pocket3" and args.pocket3_command == "rtmp":
+        from openframetap.devices.pocket3_livestream import (
+            load_fixed_proposal,
+            write_prepare_proposal,
+        )
+        from openframetap.network.secrets import require_private_directory
+        from openframetap.workflows.pocket3_rtmp import (
+            Pocket3RtmpWorkflow,
+            workflow_plan,
+        )
+
+        if args.rtmp_command == "plan":
+            print(json.dumps(workflow_plan(), indent=2, ensure_ascii=False))
+            return 0
+        if args.rtmp_command == "status":
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            print(json.dumps(workflow.to_dict(), indent=2, ensure_ascii=False))
+            return 0
+        if args.rtmp_command == "propose":
+            evidence_sha = args.server_evidence_sha256.lower()
+            if len(evidence_sha) != 64 or any(ch not in "0123456789abcdef" for ch in evidence_sha):
+                raise SystemExit("--server-evidence-sha256 must be 64 lowercase hex characters")
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            if workflow.phase != "preflight":
+                print(f"REFUSED: prepare proposal requires preflight state, found {workflow.phase}")
+                return 4
+            workflow.transition(
+                "server_ready", evidence={"sanitized_selftest_sha256": evidence_sha}
+            )
+            workflow.transition(
+                "pairing_confirmed", evidence={"prior_pairing_evidence": args.pairing_evidence}
+            )
+            payload = write_prepare_proposal(
+                address=args.address,
+                private_root=args.private_root,
+                sanitized_root=args.sanitized_root,
+            )
+            workflow.transition(
+                "prepare_proposed",
+                evidence={
+                    "proposal_sha256": payload["frame_sha256"],
+                    "locally_sent": False,
+                },
+            )
+            workflow.save(args.state_file)
+            safe = {key: value for key, value in payload.items() if key != "private_proposal"}
+            safe["private_proposal"] = "artifacts/private/<redacted-proposal-path>"
+            print(json.dumps(safe, indent=2, ensure_ascii=False))
+            print("PROPOSAL ONLY: no BLE connection or FFF5 write was attempted.")
+            return 0
+        if args.rtmp_command == "send-approved":
+            if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
+                print("REFUSED: send-approved requires the owner-only interactive wrapper and TTY.")
+                return 4
+            require_private_directory(args.output_dir)
+            proposal, raw = load_fixed_proposal(
+                args.proposal, expected_address=args.address
+            )
+            digest = proposal["frame_sha256"].lower()
+            typed = input(
+                f"Type the full SHA-256 for {proposal['command']} to send once, or Enter to stop: "
+            ).strip().lower()
+            if typed != digest:
+                print("REFUSED: confirmation mismatch; no BLE connection was attempted.")
+                return 4
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            if workflow.phase != "prepare_proposed":
+                print(f"REFUSED: workflow is {workflow.phase}, expected prepare_proposed")
+                return 4
+            payload, ok = asyncio.run(
+                manual_send_pocket3_frame(
+                    args.address,
+                    raw=raw,
+                    command_name=proposal["command"],
+                    confirmed_sha256=digest,
+                    seconds=args.seconds,
+                    output_dir=args.output_dir,
+                )
+            )
+            if ok and payload.get("writes_attempted") == 1:
+                workflow.transition(
+                    "prepare_sent", evidence={"proposal_sha256": digest, "send_count": 1}
+                )
+                workflow.save(args.state_file)
+            print(
+                json.dumps(
+                    {
+                        "ok": ok,
+                        "writes_attempted": payload.get("writes_attempted"),
+                        "automatic_follow_up_frames": 0,
+                        "private_output": str(args.output_dir),
+                    },
+                    indent=2,
+                )
+            )
+            return 0 if ok else 1
+        if args.rtmp_command == "observe":
+            require_private_directory(args.output_dir)
+            payload, ok = asyncio.run(
+                listen_pocket3(
+                    args.address,
+                    seconds=args.seconds,
+                    output_dir=args.output_dir,
+                    operation="pocket3-rtmp-passive-observe-no-query",
+                )
+            )
+            print(
+                json.dumps(
+                    {
+                        "ok": ok,
+                        "notifications_received": payload.get("notifications_received"),
+                        "fff5_write_count": 0,
+                        "private_output": str(args.output_dir),
+                    },
+                    indent=2,
+                )
+            )
+            return 0 if ok else 1
     return 2
