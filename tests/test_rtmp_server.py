@@ -13,7 +13,12 @@ def _fake_binary(path: Path) -> None:
     path.parent.mkdir(parents=True)
     if os.name == "nt":
         pytest.skip("process ownership fixture is POSIX-specific")
-    path.write_text("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n")
+    path.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = --version ]; then echo vfixture; exit 0; fi\n"
+        "trap 'exit 0' TERM INT\n"
+        "while :; do sleep 1; done\n"
+    )
     path.chmod(0o755)
 
 
@@ -47,4 +52,3 @@ def test_start_status_stop_and_pid_cleanup(tmp_path: Path, monkeypatch) -> None:
     stopped = server.stop(timeout=3)
     assert stopped.state == "foreign_listener"  # mocked reachability remains true
     assert not paths.pid_file.exists()
-
