@@ -33,8 +33,11 @@ async def probe(address: str, *, timeout: float = 20.0) -> tuple[dict[str, Any],
         "value_reads_attempted": False,
         "writes_attempted": False,
         "connected": False,
+        "connection_outcome": "not-attempted",
         "disconnected": False,
         "negotiated_mtu": None,
+        "mtu_reported_by_backend": None,
+        "mtu_source": "not-actively-acquired",
         "pairing_required": None,
         "services": [],
         "error": None,
@@ -45,8 +48,9 @@ async def probe(address: str, *, timeout: float = 20.0) -> tuple[dict[str, Any],
     try:
         await client.connect()
         payload["connected"] = bool(client.is_connected)
+        payload["connection_outcome"] = "connected"
         mtu = getattr(client, "mtu_size", None)
-        payload["negotiated_mtu"] = int(mtu) if mtu is not None else None
+        payload["mtu_reported_by_backend"] = int(mtu) if mtu is not None else None
         services: list[GattService] = []
         service_collection = client.services
         for service in service_collection:
@@ -72,10 +76,12 @@ async def probe(address: str, *, timeout: float = 20.0) -> tuple[dict[str, Any],
                 )
             )
         payload["services"] = json_safe(services)
+        payload["pairing_required"] = False
         ok = True
     except Exception as exc:  # Bleak exposes backend-specific exception types.
         error = f"{type(exc).__name__}: {exc}"
         payload["error"] = error
+        payload["connection_outcome"] = "failed"
         lowered = error.lower()
         payload["pairing_required"] = any(
             token in lowered
@@ -83,9 +89,14 @@ async def probe(address: str, *, timeout: float = 20.0) -> tuple[dict[str, Any],
         )
     finally:
         try:
-            if client.is_connected:
+            was_connected = bool(client.is_connected)
+            if was_connected:
                 await client.disconnect()
             payload["disconnected"] = not bool(client.is_connected)
+            if payload["disconnected"]:
+                payload["disconnect_reason"] = (
+                    "requested-normal-disconnect" if was_connected else "connection-not-active"
+                )
         except Exception as exc:
             payload["disconnect_reason"] = f"{type(exc).__name__}: {exc}"
     return payload, ok

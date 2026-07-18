@@ -138,7 +138,9 @@ def parse_doctor_report(report: str) -> dict[str, Any]:
         line.strip()
         for name in ("GSTREAMER DECODERS", "FFMPEG DECODERS")
         for line in sections.get(name, "").splitlines()
-        if line.strip() and not line.startswith(("[", "$"))
+        if line.strip()
+        and not line.startswith(("[", "$"))
+        and re.search(r"(?:mpp\S*dec|rkvdec|v4l2\S*dec|decoder)", line, re.I)
     ]
 
     warnings: list[str] = []
@@ -286,6 +288,21 @@ def parse_display_report(report: str) -> dict[str, Any]:
     rotation_match = re.search(
         r"<rotation>\s*([^<]+)\s*</rotation>", "\n".join(config_lines), re.I
     )
+    framebuffer_text = sections.get("FRAMEBUFFER", "")
+    framebuffer_mode_match = re.search(r'^mode\s+"([^"]+)"', framebuffer_text, re.MULTILINE)
+    framebuffer_geometry_match = re.search(
+        r"^\s*geometry\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+        framebuffer_text,
+        re.MULTILINE,
+    )
+    framebuffer = {
+        "mode": framebuffer_mode_match.group(1) if framebuffer_mode_match else None,
+        "geometry": (
+            [int(value) for value in framebuffer_geometry_match.groups()]
+            if framebuffer_geometry_match
+            else None
+        ),
+    }
     return {
         "captured_at": utc_timestamp(),
         "connectors": connectors,
@@ -294,6 +311,7 @@ def parse_display_report(report: str) -> dict[str, Any]:
         "orientation_inferred_from_mode": orientation,
         "drm_cards": sorted(set(re.findall(r"/dev/dri/card\d+", dri))),
         "render_nodes": sorted(set(re.findall(r"/dev/dri/renderD\d+", dri))),
+        "framebuffer": framebuffer,
         "display_processes": compositor_names,
         "sessions": session_lines,
         "session_details": session_details,

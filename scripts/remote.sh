@@ -47,11 +47,23 @@ run_remote() {
 }
 
 deploy() {
+  local stamp log_dir status
+  stamp="$(timestamp)"
+  log_dir="$LOCAL_ARTIFACTS/deploy-$stamp"
+  mkdir -p "$log_dir"
   print_target
+  printf '[openframetap] Local deploy command: %s\n' "$ROOT_DIR/scripts/deploy.sh"
   ROCK4D_SSH_HOST="$TARGET" \
     OPENFRAMETAP_REMOTE_DIR="$REMOTE_DIR" \
     OPENFRAMETAP_SSH_BIN="$SSH_BIN" \
-    "$ROOT_DIR/scripts/deploy.sh"
+    "$ROOT_DIR/scripts/deploy.sh" \
+      > >(tee "$log_dir/stdout.txt") \
+      2> >(tee "$log_dir/stderr.txt" >&2)
+  status=$?
+  printf '%s\n' "$status" >"$log_dir/exit-status.txt"
+  printf '[openframetap] Deploy wrapper exit status: %s\n' "$status"
+  printf '[openframetap] Local deploy log: %s\n' "$log_dir"
+  return "$status"
 }
 
 pull_file() {

@@ -74,7 +74,17 @@ def test_rsync_deploy_has_required_exclusions(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     args = args_file.read_text(encoding="utf-8").splitlines()
     assert "--delete" in args
-    for exclusion in (".git/", ".venv/", "artifacts/", "__pycache__/", "*.pcap", "*.btsnoop", "*.log"):
+    for exclusion in (
+        ".git/",
+        ".venv/",
+        "artifacts/",
+        "__pycache__/",
+        "*.pcap",
+        "*.btsnoop",
+        "*.log",
+        ".pytest_cache/",
+        "*.egg-info/",
+    ):
         assert f"--exclude={exclusion}" in args
 
 

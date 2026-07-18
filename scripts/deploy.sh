@@ -15,8 +15,12 @@ RSYNC_EXCLUDES=(
   --exclude='*.pcap'
   --exclude='*.btsnoop'
   --exclude='*.log'
+  --exclude='.pytest_cache/'
+  --exclude='*.egg-info/'
 )
 TAR_EXCLUDES=(
+  --exclude='artifacts'
+  --exclude='artifacts/*'
   --exclude='./.git'
   --exclude='./.git/*'
   --exclude='./.venv'
@@ -29,6 +33,10 @@ TAR_EXCLUDES=(
   --exclude='*.pcap'
   --exclude='*.btsnoop'
   --exclude='*.log'
+  --exclude='.pytest_cache'
+  --exclude='.pytest_cache/*'
+  --exclude='*.egg-info'
+  --exclude='*.egg-info/*'
 )
 
 printf '[openframetap] SSH target: %s\n' "$TARGET"
@@ -44,7 +52,8 @@ else
   printf '%s\n' '[openframetap] Local rsync unavailable; using tar-over-SSH fallback with the same exclusions.'
   "$SSH_BIN" "${SSH_OPTIONS[@]}" "$TARGET" \
     "set -eu; mkdir -p $REMOTE_DIR/.deploy-stage $REMOTE_DIR/artifacts; find $REMOTE_DIR/.deploy-stage -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +"
-  tar -C "$ROOT_DIR" "${TAR_EXCLUDES[@]}" -cf - . | \
+  (cd "$ROOT_DIR" && git ls-files --cached --others --exclude-standard | \
+    tar "${TAR_EXCLUDES[@]}" -cf - -T -) | \
     "$SSH_BIN" "${SSH_OPTIONS[@]}" "$TARGET" \
       "set -eu; tar -xf - -C $REMOTE_DIR/.deploy-stage; cd $REMOTE_DIR; find . -mindepth 1 -maxdepth 1 ! -name .venv ! -name artifacts ! -name .deploy-stage -exec rm -rf -- {} +; cp -a .deploy-stage/. .; rm -rf .deploy-stage"
   status=$?

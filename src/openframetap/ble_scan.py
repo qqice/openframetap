@@ -47,9 +47,12 @@ def advertisement_to_record(
     display_name = getattr(advertisement, "local_name", None) or getattr(
         device, "name", None
     )
-    rssi = getattr(advertisement, "rssi", None)
-    if rssi is None:
-        rssi = getattr(device, "rssi", None)
+    raw_rssi = getattr(advertisement, "rssi", None)
+    if raw_rssi is None:
+        raw_rssi = getattr(device, "rssi", None)
+    rssi = int(raw_rssi) if raw_rssi is not None else None
+    if rssi == 127 or (rssi is not None and not -127 <= rssi <= 20):
+        rssi = None
 
     raw_fields = {
         "local_name": getattr(advertisement, "local_name", None),
@@ -57,7 +60,8 @@ def advertisement_to_record(
         "manufacturer_data": manufacturer_data,
         "service_data": service_data,
         "tx_power": getattr(advertisement, "tx_power", None),
-        "rssi": rssi,
+        "rssi": raw_rssi,
+        "rssi_valid": rssi is not None,
         "platform_data": json_safe(getattr(advertisement, "platform_data", ())),
     }
     provisional = {

@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-# Bluetooth SIG company identifier currently associated with SZ DJI Technology.
-# It is profile metadata, never transport logic, and raw bytes are always retained.
-DJI_COMPANY_IDS = {0x0137}
+# Company/manufacturer keys are intentionally empty until a primary source or
+# device corpus verifies them. Observed keys remain in raw evidence.
+DJI_COMPANY_IDS: set[int] = set()
 DJI_NAME_TOKENS = ("dji", "osmo", "pocket")
 DJI_DISCOVERY_UUIDS = {"fff0", "0000fff0-0000-1000-8000-00805f9b34fb"}
 

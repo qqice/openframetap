@@ -35,8 +35,8 @@ def test_unknown_dji_model_is_tolerated_without_model_claim() -> None:
     match = classify_dji_osmo(
         {
             "display_name": None,
-            "service_uuids": [],
-            "manufacturer_data": {"0x0137": "ffffffffffffffff"},
+            "service_uuids": ["0000fff0-0000-1000-8000-00805f9b34fb"],
+            "manufacturer_data": {"0x08aa": "ffffffffffffffff"},
         }
     )
     assert match.suspected is True
