@@ -186,6 +186,28 @@ class _DevMode(ctypes.Structure):
     ]
 
 
+def enable_per_monitor_dpi_awareness() -> str:
+    if sys.platform != "win32":
+        return "not_windows"
+    try:
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return "per_monitor_v2"
+    except (AttributeError, OSError):
+        pass
+    try:
+        result = ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        if result in (0, -2147024891):  # S_OK or access denied because already set
+            return "per_monitor"
+    except (AttributeError, OSError):
+        pass
+    try:
+        if ctypes.windll.user32.SetProcessDPIAware():
+            return "system"
+    except (AttributeError, OSError):
+        pass
+    return "unavailable"
+
+
 def discover_displays() -> list[DisplayInfo]:
     if sys.platform != "win32":
         return [DisplayInfo(0, "default", 0, 0, 1280, 720, 60.0, True)]
@@ -313,7 +335,7 @@ def _configure_canvas(canvas, layout: PatternLayout, width: int, height: int) ->
         round(height * 0.075),
         text="SOURCE",
         fill="white",
-        font=("Consolas", max(24, height // 24), "bold"),
+        font=("Consolas", max(24, height // 30), "bold"),
         justify="center",
     )
     for name, rects in (("top", layout.top_bits), ("bottom", layout.bottom_bits)):
@@ -362,7 +384,14 @@ def _configure_canvas(canvas, layout: PatternLayout, width: int, height: int) ->
     return items
 
 
-def _update_canvas(canvas, items: dict, state: PatternState, bits: int, invert: bool) -> None:
+def _update_canvas(
+    canvas,
+    items: dict,
+    state: PatternState,
+    bits: int,
+    invert: bool,
+    refresh_hz: float | None = None,
+) -> None:
     values = gray_bit_values(state.frame_id, bits)
     previous_values = items.get("_last_values")
     for bank in ("top", "bottom"):
@@ -389,8 +418,9 @@ def _update_canvas(canvas, items: dict, state: PatternState, bits: int, invert: 
     canvas.itemconfigure(
         items["header"],
         text=(
-            f"SOURCE   FRAME {state.frame_id:05d}   "
-            f"GRAY 0x{state.gray_code:04X}   {state.milliseconds} ms"
+            f"SOURCE F{state.frame_id:05d} G{state.gray_code:04X} "
+            f"{state.milliseconds}ms"
+            + (f" @{refresh_hz:.3f}Hz" if refresh_hz is not None else "")
         ),
     )
 
@@ -491,6 +521,7 @@ def run_latency_pattern(
         raise ValueError("duration must be 1..600 seconds")
     if not 0 <= warmup_seconds <= 30:
         raise ValueError("warmup must be 0..30 seconds")
+    dpi_awareness = enable_per_monitor_dpi_awareness()
     layout = pattern_layout(bits)
     displays = discover_displays()
     if not 0 <= display_index < len(displays):
@@ -517,6 +548,7 @@ def run_latency_pattern(
         "gray_code": True,
         "invert": invert,
         "fullscreen": fullscreen,
+        "dpi_awareness": dpi_awareness,
         "warmup_seconds": warmup_seconds,
         "duration_seconds": duration_seconds,
         "clock": "time.perf_counter_ns",
@@ -623,7 +655,7 @@ def run_latency_pattern(
             skipped_submission_slots += int(missed)
             target_ns = recording_start_ns + frame_sequence * frame_interval_ns
         state = pattern_state(frame_sequence, now, bits=bits)
-        _update_canvas(canvas, items, state, bits, invert)
+        _update_canvas(canvas, items, state, bits, invert, selected_hz)
         submitted_ns = time.perf_counter_ns()
         last_submission_ns = submitted_ns
         if not first_submission_ns:
