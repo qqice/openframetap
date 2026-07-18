@@ -470,3 +470,34 @@ same authorization.
   SHA-256 is
   `a5ea033f25d80ddd6b7ffe2f09b9693abede7c95458fab1da88b3bc140c6d150`.
   It is exact-frame allowlisted while generic start/stop `02/8E` remains denied.
+
+## Same-connection full stream result
+
+- 【实机事实】One fixed, no-retry session kept a single FFF4/FFF5 BLE connection
+  across five response-gated requests: prepare `02/E1`, prepare transport
+  `02/8E`, Wi-Fi `07/47`, stream configuration `08/78`, and stream start
+  `02/8E`. No camera, recording, gimbal, stop, firmware, or network-interface
+  command was sent.
+- 【实机事实】The responses were respectively `C0/02/E1 payload 00`, the known
+  Stage 2 response beginning `0000011C00`, `C0/07/47 payload 0000`,
+  `C0/08/78 payload 00`, and `C0/02/8E payload 00`. All CRCs were valid.
+- 【实机事实】The 65.49-second BLE capture contains 2,587 notifications and
+  2,587 valid DUML frames, with zero CRC8, CRC16, reassembly, or connection
+  errors. Exactly five fixed frames were written.
+- 【实机事实】MediaMTX accepted a publisher from the Pocket-side LAN address
+  approximately two seconds after the start response and reported two tracks:
+  H.264 video and MPEG-4 audio. The stream path and key remain private.
+- 【实机事实】Two independent eight-second Windows-side readback samples were
+  remuxed without errors and yielded decodable PNG frames. The formal capture
+  measured H.264 High, 1280x720, YUV420P, approximately 29.97/30 fps, plus AAC
+  LC 48 kHz stereo. The sample, first frame, raw ffprobe output, private session
+  metadata, and SHA-256 checksums are stored only under ignored private
+  artifacts; the committed summary remains redacted.
+- 【捕获推断】The prior `D6` responses from `08/78` and start `02/8E` were caused
+  by losing a connection-scoped or short-lived preparation state. Their exact
+  protocol-level meaning is still unknown, but they are not success in this
+  workflow.
+- 【捕获推断】The successful chain validates the `0x2E` configuration variant
+  and the six-byte start payload together. It does not yet prove whether the
+  start request is universally required, nor does it identify the semantics of
+  every Stage 2 response byte.
