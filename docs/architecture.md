@@ -37,6 +37,7 @@ The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration,
 - `application state`: connection and DJI application-layer pairing state now; telemetry, video, recording, and control state later.
 - `experiments`: interactive ROCK 4D TTY events, synchronized monotonic timestamps, passive FFF4 capture, session safety counters, and raw evidence checksums.
 - `analysis`: bounded payload field enumeration, event/message alignment, correlation and lag statistics, candidate confidence, reports, and plots. It never changes raw evidence.
+- `glass latency`: Windows Gray Code submission evidence, phone-video metadata/timestamps, perspective-corrected SOURCE/DSI decoding, mixed-refresh exclusion, wrap-safe timing mapping, distribution statistics, and path-free sanitized reports. It never controls Pocket or ROCK hardware.
 - `telemetry state`: candidate values plus command, offset, encoding, raw value, evidence session, update time, and confidence provenance. Names retain `_candidate` until evidence supports promotion.
 
 Model checks belong only in the device-profile/capability layer. BLE transport, video, and UI code consume capabilities and must never scatter Pocket-specific constants. Raw advertisements remain available even when no profile matches.

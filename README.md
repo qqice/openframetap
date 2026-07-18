@@ -47,6 +47,8 @@ Run POSIX scripts from Git Bash on Windows. Set `ROCK4D_SSH_HOST` when the defau
 ./scripts/remote.sh preview-stop
 ./scripts/remote.sh media-status
 ./scripts/remote.sh media-stop-all
+.\.venv\Scripts\python.exe -m openframetap tools latency-pattern --duration 60 --fullscreen --gray-code --bits 16
+.\.venv\Scripts\python.exe -m openframetap analyze glass-latency <phone-video> --pattern-log <pattern-timing.jsonl> --interactive-roi
 ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
 ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
 ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
@@ -104,4 +106,4 @@ python -m openframetap pocket3 rtmp propose wifi --secret-file <private-0600-fil
 python -m openframetap pocket3 rtmp propose prepare-recovery --wifi-result <validated-no-response-result>
 ```
 
-See [video pipeline validation](docs/video-pipeline.md), [architecture](docs/architecture.md), [Pocket 3 RTMP protocol](docs/pocket3-rtmp-protocol.md), [telemetry experiment](docs/telemetry-experiment.md), [manual pairing](docs/manual-pairing.md), [reference matrix](docs/reference-matrix.md), [hardware audit](docs/hardware-audit.md), [display baseline](docs/display-baseline.md), [protocol notes](docs/protocol-notes.md), and [roadmap](docs/roadmap.md).
+See [glass-to-glass latency](docs/glass-latency.md), [video pipeline validation](docs/video-pipeline.md), [architecture](docs/architecture.md), [Pocket 3 RTMP protocol](docs/pocket3-rtmp-protocol.md), [telemetry experiment](docs/telemetry-experiment.md), [manual pairing](docs/manual-pairing.md), [reference matrix](docs/reference-matrix.md), [hardware audit](docs/hardware-audit.md), [display baseline](docs/display-baseline.md), [protocol notes](docs/protocol-notes.md), and [roadmap](docs/roadmap.md).
