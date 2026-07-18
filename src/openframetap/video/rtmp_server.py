@@ -209,7 +209,16 @@ class RtmpServer:
                     f"MediaMTX exited during startup with status {process.returncode}; inspect {self.paths.log_file}"
                 )
             if tcp_reachable(self.ipv4, self.port, timeout=0.2):
-                return self.status()
+                current = self.status()
+                if current.state == "running":
+                    return current
+                # A shebang-based test/helper can briefly retain the parent's
+                # cmdline between fork and exec. Keep the ownership check
+                # strict, but do not expose that transient state as success.
+                if current.state != "ownership_mismatch":
+                    raise RuntimeError(
+                        f"listener became reachable while server state is {current.state}"
+                    )
             time.sleep(0.1)
         self.stop(timeout=2.0)
         raise TimeoutError(f"MediaMTX did not listen on {self.listener_address}")
