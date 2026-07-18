@@ -14,6 +14,7 @@ from typing import Any
 
 STATS_PREFIX = "OPENFRAMETAP_PLAYER_STATS="
 EVENT_PREFIX = "OPENFRAMETAP_PLAYER_EVENT="
+FRAME_PREFIX = "OPENFRAMETAP_FRAME="
 
 
 def should_apply_fullscreen(
@@ -72,6 +73,7 @@ def run(path: Path) -> int:
     fullscreen_applied = False
     first_frame_reported = False
     maximum_reported_fps: float | None = None
+    last_frame_report_ns = 0
     error_message: str | None = None
     eos = False
     started_ns = time.monotonic_ns()
@@ -116,9 +118,28 @@ def run(path: Path) -> int:
             except TypeError:
                 last_message = ""
             match = re.search(r"(?:current|fps):\s*([\d.]+)", last_message)
+            current_fps = None
             if match:
                 current_fps = float(match.group(1))
                 maximum_reported_fps = max(maximum_reported_fps or 0.0, current_fps)
+            now_ns = time.monotonic_ns()
+            if frames > 0 and now_ns - last_frame_report_ns >= 500_000_000:
+                last_frame_report_ns = now_ns
+                print(
+                    FRAME_PREFIX
+                    + json.dumps(
+                        {
+                            "monotonic_ns": now_ns,
+                            "rendered_frames": frames,
+                            "dropped_frames": _integer_property(
+                                fps_sink, "frames-dropped"
+                            ),
+                            "current_fps": current_fps,
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
             if should_apply_fullscreen(
                 requested=fullscreen_requested,
                 already_applied=fullscreen_applied,

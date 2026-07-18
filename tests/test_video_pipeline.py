@@ -9,7 +9,11 @@ from openframetap.display.dsi import parse_mutter_state
 from openframetap.display.session import parse_loginctl_session, parse_overview_active
 from openframetap.video.decoder_probe import parse_gst_inspect
 from openframetap.video.metrics import read_temperature_c, summarize_metrics, MetricSample
-from openframetap.video.live_preview import decode_error_lines, parse_fps_messages
+from openframetap.video.live_preview import (
+    decode_error_lines,
+    parse_fps_messages,
+    parse_frame_reports,
+)
 from openframetap.video.gst_player import should_apply_fullscreen
 from openframetap.video.latency import parse_latency_tracer
 from openframetap.video.pipelines import (
@@ -147,6 +151,11 @@ last-message = rendered: 56, dropped: 5, current: 30.00, average: 27.77
     assert payload["rendered_frames"] == 56
     assert payload["dropped_frames"] == 5
     assert payload["last_reported_fps"] == 30.0
+    assert parse_frame_reports(text)[-1] == {
+        "rendered_frames": 56,
+        "dropped_frames": 5,
+        "current_fps": 30.0,
+    }
 
 
 def test_structured_player_stats_override_debug_log_messages() -> None:
@@ -157,6 +166,14 @@ def test_structured_player_stats_override_debug_log_messages() -> None:
     )
     assert parse_fps_messages(text)["rendered_frames"] == 42
     assert decode_error_lines(text) == []
+
+
+def test_structured_frame_reports_preserve_monotonic_clock() -> None:
+    text = (
+        'OPENFRAMETAP_FRAME={"monotonic_ns": 123, "rendered_frames": 7, '
+        '"dropped_frames": 1, "current_fps": 29.8}\n'
+    )
+    assert parse_frame_reports(text)[0]["monotonic_ns"] == 123
 
 
 def test_wayland_fullscreen_is_only_applied_after_first_frame() -> None:

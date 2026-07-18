@@ -102,6 +102,79 @@ def decode_error_lines(text: str) -> list[str]:
     ]
 
 
+def parse_frame_reports(text: str) -> list[dict]:
+    reports = []
+    for encoded in re.findall(r"OPENFRAMETAP_FRAME=(\{[^\n]+\})", text):
+        try:
+            reports.append(json.loads(encoded))
+        except json.JSONDecodeError:
+            continue
+    if reports:
+        return reports
+    for line in text.splitlines():
+        match = re.search(
+            r"rendered:\s*(\d+),\s*dropped:\s*(\d+),\s*current:\s*([\d.]+)",
+            line,
+        )
+        if match:
+            reports.append(
+                {
+                    "rendered_frames": int(match.group(1)),
+                    "dropped_frames": int(match.group(2)),
+                    "current_fps": float(match.group(3)),
+                }
+            )
+    return reports
+
+
+def write_sanitized_preview_artifacts(directory: Path, payload: dict) -> list[Path]:
+    directory.mkdir(parents=True, exist_ok=True)
+    documents = {
+        "decoder-summary.json": {
+            "decoder": payload["pipeline"]["decoder"],
+            "source": payload["pipeline"]["source_kind"],
+            "decode_errors": payload["decode_errors"],
+            "frames": payload["frames"],
+        },
+        "display-summary.json": {
+            "session": payload["display_session"],
+            "fullscreen": payload["fullscreen"],
+            "screenshot": payload["screenshot"],
+        },
+        "performance-summary.json": payload,
+        "latency-summary.json": {
+            "startup_timeline": payload["startup_timeline"],
+            "internal_latency": payload["latency"],
+            "glass_to_glass_measured": False,
+        },
+    }
+    paths = []
+    for name, document in documents.items():
+        path = directory / name
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        paths.append(path)
+    report = directory / "report.md"
+    report.write_text(
+        "# Live preview evidence\n\n"
+        f"- Hardware decoder element: `{payload['pipeline']['decoder']}`\n"
+        f"- Rendered/dropped: {payload['frames']['rendered_frames']} / "
+        f"{payload['frames']['dropped_frames']}\n"
+        f"- Decode errors: {payload['decode_errors']}\n"
+        f"- Fullscreen applied after surface: "
+        f"{payload['fullscreen']['applied_after_surface']}\n"
+        f"- Internal tracer average: {payload['latency'].get('average_ms')} ms\n"
+        "- Glass-to-glass latency: not measured\n",
+        encoding="utf-8",
+    )
+    paths.append(report)
+    checksum = directory / "checksums.sha256"
+    checksum.write_text(
+        "".join(f"{_sha256(path)}  {path.name}\n" for path in paths),
+        encoding="ascii",
+    )
+    return paths + [checksum]
+
+
 def run_preview(
     spec: PipelineSpec,
     *,
@@ -125,6 +198,7 @@ def run_preview(
     )
     log_path = private_dir / "gst.log"
     metrics_path = private_dir / "metrics.jsonl"
+    frames_path = private_dir / "frames.jsonl"
     pipeline_path = private_dir / "pipeline.json"
     timeline = StartupTimeline(command_started_ns=time.monotonic_ns())
     pipeline_path.write_text(
@@ -223,6 +297,11 @@ def run_preview(
     )
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
     frame_stats = parse_fps_messages(log_text)
+    frame_reports = parse_frame_reports(log_text)
+    frames_path.write_text(
+        "".join(json.dumps(item, sort_keys=True) + "\n" for item in frame_reports),
+        encoding="utf-8",
+    )
     fullscreen_events = []
     for encoded in re.findall(r"OPENFRAMETAP_PLAYER_EVENT=(\{[^\n]+\})", log_text):
         try:
@@ -286,9 +365,8 @@ def run_preview(
         )
     private_summary = private_dir / "summary.json"
     private_summary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    sanitized_summary = sanitized_dir / "performance-summary.json"
-    sanitized_summary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    checks = [pipeline_path, log_path, metrics_path, private_summary]
+    write_sanitized_preview_artifacts(sanitized_dir, payload)
+    checks = [pipeline_path, log_path, metrics_path, frames_path, private_summary]
     if (private_dir / "mediamtx-status.json").exists():
         checks.append(private_dir / "mediamtx-status.json")
     if screenshot_path.is_file():
