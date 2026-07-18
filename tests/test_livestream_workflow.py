@@ -10,6 +10,7 @@ import pytest
 from openframetap.devices.pocket3_livestream import (
     load_fixed_proposal,
     load_fixed_stream_proposal,
+    load_fixed_stream_url,
     load_fixed_start_transport_proposal,
     load_fixed_wifi_proposal,
     write_prepare_recovery_proposal,
@@ -126,6 +127,7 @@ def test_stream_proposal_is_private_and_sanitized(tmp_path: Path) -> None:
     )
     private_path = Path(payload["private_proposal"])
     private, raw = load_fixed_stream_proposal(private_path, expected_address=ADDRESS)
+    assert load_fixed_stream_url(private_path, expected_address=ADDRESS) == url
     sanitized = Path(payload["sanitized_proposal"]).read_text(encoding="utf-8")
     assert stream_key.encode() in raw
     assert stream_key not in sanitized

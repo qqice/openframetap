@@ -497,6 +497,18 @@ def load_fixed_stream_proposal(path: Path, *, expected_address: str) -> tuple[di
     return payload, raw
 
 
+def load_fixed_stream_url(path: Path, *, expected_address: str) -> str:
+    """Return the private RTMP URL only after full fixed-proposal validation."""
+
+    _payload, raw = load_fixed_stream_proposal(path, expected_address=expected_address)
+    decoded = decode_duml_frame(raw)
+    url_length = int.from_bytes(decoded.payload[12:14], "little")
+    url_bytes = decoded.payload[14 : 14 + url_length]
+    if len(url_bytes) != url_length or len(decoded.payload) != 14 + url_length:
+        raise PermissionError("stream proposal URL packing is invalid")
+    return url_bytes.decode("utf-8")
+
+
 def write_start_transport_proposal(
     *,
     address: str,

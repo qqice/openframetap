@@ -260,7 +260,11 @@ async def run_prepare_recovery_session(
             }
         )
         recovery_event(
-            "human_confirmed_frame_written",
+            (
+                "autonomous_reversible_fixed_frame_written"
+                if stream_stage is not None
+                else "human_confirmed_frame_written"
+            ),
             stage=stage["stage"],
             frame_sha256=digest,
         )
@@ -473,7 +477,11 @@ async def run_prepare_recovery_session(
             pairing_requested=False,
             extra_summary={
                 "prepare_recovery_same_connection": True,
-                "authorization_model": "owner_invoked_fixed_wrapper",
+                "authorization_model": (
+                    "fixed_hash_autonomous_reversible_wrapper"
+                    if stream_stage is not None
+                    else "owner_invoked_fixed_wrapper"
+                ),
                 "command_invocation_authorized": True,
                 "interactive_sha_prompts": 0,
                 "each_fixed_frame_preapproved": True,

@@ -179,6 +179,7 @@ Usage:
   ./scripts/remote.sh pocket3-rtmp-send-approved-stream
   ./scripts/remote.sh pocket3-rtmp-send-approved-stream-start
   ./scripts/remote.sh pocket3-rtmp-run-full-stream-session
+  ./scripts/remote.sh pocket3-rtmp-capture-live-sample [seconds]
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
   ./scripts/remote.sh pocket3-rtmp-configure-stream-key
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
@@ -748,6 +749,43 @@ chmod 600 artifacts/private/approved-full-stream/*.json artifacts/private/pocket
       exit 3
     }
     pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    exit "$status"
+    ;;
+  pocket3-rtmp-capture-live-sample)
+    seconds="${2:-8}"
+    [[ $# -le 2 && "$seconds" =~ ^[1-9][0-9]*$ && "$seconds" -le 60 ]] || {
+      echo 'capture seconds must be an integer from 1 to 60' >&2
+      exit 2
+    }
+    proposal_json="$APPROVED_STREAM_DIR/proposal-private.json"
+    [[ -f "$proposal_json" && -f "$RTMP_WORKFLOW_STATE" ]] || exit 2
+    [[ -x "$LOCAL_PYTHON_BIN" && -x "$LOCAL_FFMPEG_BIN" && -x "$LOCAL_FFPROBE_BIN" ]] || {
+      echo '[openframetap] Local Python/FFmpeg/FFprobe tools are unavailable.' >&2
+      exit 2
+    }
+    run_remote rtmp-live-capture-preflight \
+      "cd $REMOTE_DIR && .venv/bin/python -m openframetap video server status"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    stamp="$(timestamp)"
+    private_output="$ROOT_DIR/artifacts/private/pocket3-live-sample-$stamp"
+    sanitized_output="$ROOT_DIR/artifacts/sanitized/pocket3-live-sample-$stamp"
+    "$LOCAL_PYTHON_BIN" -m openframetap video capture-live \
+      --proposal "$proposal_json" --address "$POCKET3_ADDRESS" --seconds "$seconds" \
+      --private-output "$private_output" --sanitized-output "$sanitized_output" \
+      --ffmpeg-bin "$LOCAL_FFMPEG_BIN" --ffprobe-bin "$LOCAL_FFPROBE_BIN" \
+      --state-file "$RTMP_WORKFLOW_STATE"
+    status=$?
+    if [[ $status -eq 0 ]]; then
+      "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" \
+        "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/pocket3-rtmp-workflow.json.new" || exit $?
+      run_remote rtmp-live-capture-state-finalize "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/pocket3-rtmp-workflow.json.new artifacts/private/pocket3-rtmp-workflow.json
+chmod 600 artifacts/private/pocket3-rtmp-workflow.json" || exit $?
+    fi
+    printf '[openframetap] PRIVATE_SAMPLE_DIR=%s\n' "$private_output"
+    printf '[openframetap] SANITIZED_SAMPLE_DIR=%s\n' "$sanitized_output"
     exit "$status"
     ;;
   pocket3-rtmp-configure-wifi-secrets)

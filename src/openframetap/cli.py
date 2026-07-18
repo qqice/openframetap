@@ -132,6 +132,24 @@ def build_parser() -> argparse.ArgumentParser:
     video_self_test.add_argument("--sanitized-output", type=Path, required=True)
     video_self_test.add_argument("--ffmpeg-bin")
     video_self_test.add_argument("--ffprobe-bin")
+    video_live_capture = video_commands.add_parser(
+        "capture-live", help="read and validate an existing private RTMP publisher"
+    )
+    video_live_capture.add_argument("--proposal", type=Path, required=True)
+    video_live_capture.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    video_live_capture.add_argument("--seconds", type=int, default=8)
+    video_live_capture.add_argument("--private-output", type=Path, required=True)
+    video_live_capture.add_argument("--sanitized-output", type=Path, required=True)
+    video_live_capture.add_argument("--ffmpeg-bin")
+    video_live_capture.add_argument("--ffprobe-bin")
+    video_live_capture.add_argument(
+        "--state-file",
+        type=Path,
+        default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
+    )
 
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
@@ -428,6 +446,56 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (OSError, SelfTestError, subprocess.SubprocessError) as exc:
             print(f"RTMP_SELF_TEST_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "video" and args.video_command == "capture-live":
+        from openframetap.devices.pocket3_livestream import load_fixed_stream_url
+        from openframetap.video.sample_capture import SelfTestError, run_rtmp_live_capture
+        from openframetap.workflows.pocket3_rtmp import PHASES, Pocket3RtmpWorkflow
+
+        try:
+            url = load_fixed_stream_url(args.proposal, expected_address=args.address)
+            payload = run_rtmp_live_capture(
+                url=url,
+                private_output=args.private_output,
+                sanitized_output=args.sanitized_output,
+                duration_seconds=args.seconds,
+                ffmpeg_bin=args.ffmpeg_bin,
+                ffprobe_bin=args.ffprobe_bin,
+            )
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            for phase, evidence in (
+                ("rtmp_connected", {"capture_kind": payload["kind"]}),
+                (
+                    "media_detected",
+                    {
+                        "video_codec": payload["details"]["metadata"]["video"]["codec"],
+                        "audio_codec": (
+                            payload["details"]["metadata"]["audio"] or {}
+                        ).get("codec"),
+                    },
+                ),
+                (
+                    "sample_saved",
+                    {
+                        "sample_sha256": payload["details"]["sample_sha256"],
+                        "first_frame_sha256": payload["details"]["first_frame_sha256"],
+                    },
+                ),
+            ):
+                if PHASES.index(workflow.phase) >= PHASES.index(phase):
+                    continue
+                workflow.transition(phase, evidence=evidence)
+            workflow.save(args.state_file)
+        except (
+            OSError,
+            PermissionError,
+            SelfTestError,
+            subprocess.SubprocessError,
+            ValueError,
+        ) as exc:
+            print(f"RTMP_LIVE_CAPTURE_FAILED: {exc}")
             return 1
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
