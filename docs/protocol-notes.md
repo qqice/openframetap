@@ -60,6 +60,18 @@ The immutable session artifact used the then-current label `pairing_started` for
 
 See `reference-matrix.md` for public-source agreement, contradictions, and confidence labels.
 
+## Controlled telemetry experiment implementation
+
+The new `pocket3 experiment` entrypoint is a passive FFF4 session and is not a continuation of pairing. It uses the ROCK 4D wall and monotonic clocks for both key events and notifications, records ATT-MTU/CCCD/FFF5 counters, and fails closed if `fff5_write_count` is not exactly zero. The CLI refuses a non-TTY invocation before opening BLE. The local wrapper uses a TTY only for this subcommand and still uses the existing deployment and evidence-pull boundary.
+
+The capture wrapper starts `btmon`, guarantees cleanup through its existing trap, and writes SHA-256 entries for `capture.btsnoop`, `btmon.txt`, `notifications.jsonl`, `duml-frames.jsonl`, and `events.jsonl` only after `btmon` stops. Ctrl+C and normal `q` exit both run the disconnect/finalize path. No new third-party Python dependency is used.
+
+Offline analysis groups each command by payload length before enumerating bounded aligned 1-, 2-, 3-, and 4-byte candidates, changing bit fields, reasonable float32 values, and printable ASCII runs. It retains fixed scaling candidates rather than fitting arbitrary scales. Event-direction scores, static variance, nearest-neighbor unmatched ratios, Pearson/Spearman relationships, first differences, fixed ratios, sign inversions, and lag candidates remain statistics rather than field names.
+
+The analyzer refuses a session whose FFF5 counter is nonzero or whose raw checksum manifest is incomplete or changed. Results are written only below `analysis/`; a second checksum verification proves the raw evidence remained unchanged. `02/80` remains a low-confidence camera-status family and its old `pairing_started` interpretation remains rejected.
+
+As of this implementation commit, the new controlled physical experiment has not been started. Therefore no existing `04/05`, `04/27`, `04/1C`, `04/38`, or `0D/02` candidate has been promoted by this tooling yet.
+
 ## Research inputs
 
 Future Pocket 3 research may compare `lib-osmo-ble`, `djictl`, `node-osmo`, and Moblin, but constants and packet layouts must be verified on the target device before use. Pocket 4 and Pocket 4P require separate capability profiles and cannot inherit Pocket 3 behavior by assumption.
