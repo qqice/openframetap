@@ -39,6 +39,33 @@ artifacts/remote/pocket3-manual-frame-YYYYMMDD-HHMMSS/
 
 The directory contains the raw btsnoop, btmon text, raw notifications, parsed DUML frames, unknown frames, transport events, `transmission.json`, and `summary.json`. No stage-one or stage-two candidate may be executed until that directory has been analyzed and the observed response is an exact expected state transition.
 
+## Stage-one candidate after first-frame analysis
+
+The first human-executed request produced exact `00 02` confirmation-required status and repeated `40/07/46 payload 01` approval requests. The modal/latest approval frame was:
+
+```text
+550e046607020100400746019767
+```
+
+The generated ACK mirrors that sequence and swaps sender/receiver:
+
+```text
+550e046602070100c0074600b23c
+SHA-256 1e10d392c3d61b8e51610182e6a74418eaa19685ef56fb8e5f9251b5292d46c2
+```
+
+Because the sequence may be session-specific, the runtime must reobserve the complete prerequisite frame before writing. The owner-only command therefore supplies both files:
+
+```bash
+./scripts/remote.sh pocket3-send-frame \
+  artifacts/local/proposed-pairing-stage1-frame.bin \
+  pairing_stage1_ack \
+  10 \
+  artifacts/local/proposed-pairing-stage1-prerequisite.bin
+```
+
+If the prerequisite changes or is absent, the command captures evidence and exits with zero FFF5 writes. Even after a successful stage-one ACK, it cannot automatically send stage two.
+
 ## State separation
 
 BlueZ pairing/bonding is not requested. The single frame targets DJI application-layer pairing. A Pocket-screen confirmation is a separate human action. Seeing a BLE connection, continuous telemetry, or an unchanged connection is not by itself evidence that DJI application pairing succeeded.

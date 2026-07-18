@@ -32,6 +32,14 @@ The btmon trace shows an ATT MTU request and response of 517 in both directions.
 
 The second connection had one short setup-stage disconnect before the stable active connection. The active 60-second interval had no interruption. Future summaries split setup disconnect callbacks from active-listen interruptions; the original immutable session summary retains its earlier combined count of one.
 
+## 2026-07-18 first human-executed pairing frame
+
+The owning user manually executed the reviewed `set_pairing_pin` candidate. Evidence is archived at `artifacts/remote/pocket3-manual-frame-20260718-205833/`. The confirmed and written full-frame SHA-256 is `57725c09e6cd6f973161fb3e90fb74f1abc008f089c858df0dd7dc4ac63308a4`; Bleak's public MTU value caused the 34-byte frame to be emitted as two ordered FFF5 ATT Write Commands. No other application frame was written and `automatic_follow_up_frames` is zero.
+
+The Pocket returned CRC-valid `550f04a2070272aac0074500020069` approximately 175 ms after the completed write. This is an exact `C0/07/45`, sequence `72AA`, payload `00 02` response and is therefore a local hardware fact that confirmation was required. About 9.95 seconds later, after the user's Pocket-screen action, the device sent `40/07/46 payload 01`. It sent one request with sequence bytes `0A 00`, followed by nine one-second repetitions using sequence bytes `01 00`. No protocol mismatch or connection interruption occurred.
+
+The repetition is a capture fact; interpreting it as a request awaiting the Mimo-style `C0/07/46 payload 00` ACK is a capture inference corroborated by the published Mimo trace and `djictl`. The next offline candidate mirrors sequence `01 00`, but the manual runtime additionally requires the complete corresponding incoming approval frame to be reobserved before it can write. If that exact prerequisite is absent, the attempt performs zero FFF5 writes.
+
 Pairing is DJI application state, not BlueZ bonding. The offline state machine distinguishes an ordinary BLE connection, a DJI pairing-status response, a Pocket-screen approval, and stage-one/stage-two evidence. It emits `propose_*` actions only; it does not call the transport. Each proposed frame requires a separate interactive full-SHA confirmation by the owning user. It permits at most two explicitly initiated attempts, safely ignores an exact duplicate status after the state has advanced, stops on an unexpected payload, timeout, disconnect, or cancellation, and does not guess alternate IDs or payloads.
 
 See `reference-matrix.md` for public-source agreement, contradictions, and confidence labels.
