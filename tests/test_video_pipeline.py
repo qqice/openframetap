@@ -8,6 +8,7 @@ from openframetap.display.dsi import parse_mutter_state
 from openframetap.display.session import parse_loginctl_session
 from openframetap.video.decoder_probe import parse_gst_inspect
 from openframetap.video.metrics import read_temperature_c, summarize_metrics, MetricSample
+from openframetap.video.live_preview import parse_fps_messages
 from openframetap.video.pipelines import (
     PipelineProfile,
     live_pipeline,
@@ -78,6 +79,7 @@ def test_live_rtmp_and_rtsp_sources_are_structured_and_hls_is_forbidden() -> Non
     assert rtmp.elements[:2] == ("rtmpsrc", "flvdemux")
     assert rtsp.elements[:2] == ("rtspsrc", "rtph264depay")
     assert "leaky=downstream" in rtmp.argv
+    assert any("waylandsink fullscreen=true" in item for item in rtmp.argv)
     with pytest.raises(ValueError, match="HLS"):
         live_pipeline("http://invalid", source="hls", decoder="mppvideodec")
 
@@ -119,3 +121,14 @@ def test_temperature_and_metric_summary(tmp_path: Path) -> None:
     assert summary["average_cpu_percent"] == 20.0
     assert summary["peak_rss_bytes"] == 300
     assert summary["peak_temperature_c"] == 54.0
+
+
+def test_gstreamer_qos_frame_messages_are_serialized() -> None:
+    text = """
+last-message = rendered: 26, dropped: 5, current: 29.96, average: 25.57
+last-message = rendered: 56, dropped: 5, current: 30.00, average: 27.77
+"""
+    payload = parse_fps_messages(text)
+    assert payload["rendered_frames"] == 56
+    assert payload["dropped_frames"] == 5
+    assert payload["last_reported_fps"] == 30.0

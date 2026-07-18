@@ -174,6 +174,12 @@ Usage:
   ./scripts/remote.sh video-doctor
   ./scripts/remote.sh display-doctor
   ./scripts/remote.sh video-benchmark <local-sample>
+  ./scripts/remote.sh preview-file <local-sample>
+  ./scripts/remote.sh live-preview [seconds]
+  ./scripts/remote.sh preview-status
+  ./scripts/remote.sh preview-stop
+  ./scripts/remote.sh media-status
+  ./scripts/remote.sh media-stop-all
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
@@ -710,19 +716,14 @@ chmod 600 artifacts/private/approved-stream-start/proposal-private.json artifact
     wifi_json="$APPROVED_WIFI_RECOVERY_DIR/proposal-private.json"
     stream_json="$APPROVED_STREAM_DIR/proposal-private.json"
     start_json="$APPROVED_STREAM_START_DIR/proposal-private.json"
-    session_consumed="$APPROVED_STREAM_START_DIR/full-stream-session.consumed"
     [[ -f "$prepare_json" && -f "$wifi_json" && -f "$stream_json" && -f "$start_json" && -f "$RTMP_WORKFLOW_STATE" ]] || exit 2
-    [[ ! -e "$session_consumed" ]] || {
-      echo '[openframetap] Refused: full-stream session is already consumed.' >&2
-      exit 4
-    }
-    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"waiting_for_rtmp"' "$RTMP_WORKFLOW_STATE" || {
-      echo '[openframetap] Refused: full-stream session requires waiting_for_rtmp state.' >&2
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"(waiting_for_rtmp|rtmp_connected|media_detected|sample_saved|stability_tested|completed)"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: full-stream session requires an established RTMP workflow state.' >&2
       exit 4
     }
     printf '%s\n' '[openframetap] AUTONOMOUS REVERSIBLE: five response-gated frames in one BLE connection.'
     printf '%s\n' '[openframetap] No loop, random mutation, stop, camera, or gimbal command is included.'
-    printf 'consumed_at_utc=%s\n' "$(timestamp)" >"$session_consumed"
+    printf 'invoked_at_utc=%s\n' "$(timestamp)" >>"$APPROVED_STREAM_START_DIR/full-stream-session.audit.log"
     deploy || exit $?
     run_remote rtmp-full-stream-stage "set -eu
 cd $REMOTE_DIR
@@ -839,12 +840,74 @@ chmod 700 artifacts/private/video-input artifacts/private/$stem"
 cd $REMOTE_DIR
 mv '$remote_sample.new' '$remote_sample'
 chmod 600 '$remote_sample'
-trap 'rm -f $remote_sample' EXIT INT TERM
 .venv/bin/python -m openframetap video benchmark --input '$remote_sample' --all-decoders --output-dir 'artifacts/private/$stem'
 printf 'ARTIFACT_DIR=private/$stem\n'"
     status=$?
+    run_remote video-benchmark-cleanup "cd $REMOTE_DIR && rm -f '$remote_sample'" || true
     pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     exit "$status"
+    ;;
+  preview-file)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    sample_path="$2"
+    [[ -f "$sample_path" ]] || { echo "sample not found: $sample_path" >&2; exit 2; }
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="preview-file-$stamp"
+    remote_sample="artifacts/private/video-input/$stamp-preview.flv"
+    run_remote preview-file-stage "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/video-input artifacts/private/$stem/window artifacts/private/$stem/fullscreen artifacts/sanitized/$stem/window artifacts/sanitized/$stem/fullscreen
+chmod 700 artifacts/private/video-input artifacts/private/$stem artifacts/private/$stem/window artifacts/private/$stem/fullscreen" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$sample_path" \
+      "$TARGET:${REMOTE_DIR#\~/}/$remote_sample.new" || exit $?
+    run_remote preview-file-run "set -eu
+cd $REMOTE_DIR
+mv '$remote_sample.new' '$remote_sample'
+chmod 600 '$remote_sample'
+.venv/bin/python -m openframetap video preview-file --input '$remote_sample' --decoder auto --sink wayland --duration 20 --private-output 'artifacts/private/$stem/window' --sanitized-output 'artifacts/sanitized/$stem/window'
+.venv/bin/python -m openframetap video preview-file --input '$remote_sample' --decoder auto --sink wayland --fullscreen --duration 20 --private-output 'artifacts/private/$stem/fullscreen' --sanitized-output 'artifacts/sanitized/$stem/fullscreen'
+printf 'ARTIFACT_DIR=private/$stem\n'"
+    status=$?
+    run_remote preview-file-cleanup "cd $REMOTE_DIR && rm -f '$remote_sample'" || true
+    pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_dir "artifacts/sanitized/$stem" "$ROOT_DIR/artifacts/sanitized" || exit $?
+    exit "$status"
+    ;;
+  live-preview)
+    seconds="${2:-120}"
+    [[ $# -le 2 && "$seconds" =~ ^[1-9][0-9]*$ && "$seconds" -le 900 ]] || {
+      echo 'live-preview seconds must be an integer from 1 to 900' >&2
+      exit 2
+    }
+    run_remote live-preview-publisher-check "if ss -Htn state established sport = :1935 | grep -q .; then echo PUBLISHER_PRESENT=1; else echo PUBLISHER_PRESENT=0; fi"
+    publisher_present="$(extract_stem PUBLISHER_PRESENT | tr -d '\r')"
+    if [[ "$publisher_present" != "1" ]]; then
+      "$0" pocket3-rtmp-run-full-stream-session || exit $?
+    fi
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="live-preview-$stamp"
+    run_remote live-preview-stage "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/approved-live-preview artifacts/private/$stem artifacts/sanitized/$stem
+chmod 700 artifacts/private/approved-live-preview artifacts/private/$stem" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$APPROVED_STREAM_DIR/proposal-private.json" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-live-preview/stream.json.new" || exit $?
+    run_remote live-preview-run "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/approved-live-preview/stream.json.new artifacts/private/approved-live-preview/stream.json
+chmod 600 artifacts/private/approved-live-preview/stream.json
+.venv/bin/python -m openframetap video live-preview --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --source auto --decoder auto --sink wayland --fullscreen --profile low-latency --duration '$seconds' --private-output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem'
+printf 'ARTIFACT_DIR=private/$stem\n'"
+    status=$?
+    pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_dir "artifacts/sanitized/$stem" "$ROOT_DIR/artifacts/sanitized" || exit $?
+    exit "$status"
+    ;;
+  preview-status|preview-stop|media-status|media-stop-all)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    run_remote "$action" "cd $REMOTE_DIR && .venv/bin/python -m openframetap video '$action'"
     ;;
   pocket3-rtmp-configure-wifi-secrets)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }

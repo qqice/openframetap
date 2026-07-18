@@ -126,6 +126,36 @@ def build_parser() -> argparse.ArgumentParser:
     video_benchmark.add_argument("--input", type=Path, required=True)
     video_benchmark.add_argument("--all-decoders", action="store_true")
     video_benchmark.add_argument("--output-dir", type=Path, required=True)
+    preview_file = video_commands.add_parser(
+        "preview-file", help="play one local sample in the existing Wayland session"
+    )
+    preview_file.add_argument("--input", type=Path, required=True)
+    preview_file.add_argument("--decoder", default="auto")
+    preview_file.add_argument("--sink", choices=("wayland",), default="wayland")
+    preview_file.add_argument("--fullscreen", action="store_true")
+    preview_file.add_argument("--duration", type=int, default=20)
+    preview_file.add_argument("--private-output", type=Path, required=True)
+    preview_file.add_argument("--sanitized-output", type=Path, required=True)
+    live_preview = video_commands.add_parser(
+        "live-preview", help="bounded low-latency Pocket 3 preview"
+    )
+    live_preview.add_argument("--proposal", type=Path, required=True)
+    live_preview.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    live_preview.add_argument("--source", choices=("auto", "rtmp", "rtsp"), default="auto")
+    live_preview.add_argument("--decoder", default="auto")
+    live_preview.add_argument("--sink", choices=("wayland",), default="wayland")
+    live_preview.add_argument("--profile", choices=("stable", "low-latency", "aggressive-low-latency"), default="low-latency")
+    live_preview.add_argument("--fullscreen", action="store_true")
+    live_preview.add_argument("--duration", type=int, default=120)
+    live_preview.add_argument("--private-output", type=Path, required=True)
+    live_preview.add_argument("--sanitized-output", type=Path, required=True)
+    video_commands.add_parser("preview-status", help="show only OpenFrameTap-owned preview PIDs")
+    video_commands.add_parser("preview-stop", help="stop only the OpenFrameTap preview PID")
+    video_commands.add_parser("media-status", help="show all OpenFrameTap-owned media PIDs")
+    video_commands.add_parser("media-stop-all", help="stop all and only OpenFrameTap-owned media PIDs")
     video_server = video_commands.add_parser("server", help="MediaMTX lifecycle")
     video_server_commands = video_server.add_subparsers(
         dest="video_server_command", required=True
@@ -399,6 +429,72 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
+    if args.command == "video" and args.video_command in {
+        "preview-status",
+        "preview-stop",
+        "media-status",
+        "media-stop-all",
+    }:
+        from openframetap.video.player_process import ProcessRegistry
+
+        registry = ProcessRegistry(Path("runtime/media-processes.json"))
+        if args.video_command in {"preview-status", "media-status"}:
+            payload = {name: item.to_dict() for name, item in registry.load().items()}
+        elif args.video_command == "preview-stop":
+            payload = {"stopped": registry.stop("preview")}
+        else:
+            payload = {"stopped": registry.stop_all()}
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "video" and args.video_command == "preview-file":
+        from openframetap.video.live_preview import run_preview
+        from openframetap.workflows.pocket3_preview import file_preview_spec
+
+        try:
+            spec = file_preview_spec(
+                args.input, decoder=args.decoder, fullscreen=args.fullscreen
+            )
+            payload = run_preview(
+                spec,
+                private_output=args.private_output,
+                sanitized_output=args.sanitized_output,
+                duration_seconds=args.duration,
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"PREVIEW_FILE_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if payload["decode_errors"] == 0 else 1
+    if args.command == "video" and args.video_command == "live-preview":
+        from urllib.parse import urlsplit, urlunsplit
+
+        from openframetap.devices.pocket3_livestream import load_fixed_stream_url
+        from openframetap.video.live_preview import run_preview
+        from openframetap.workflows.pocket3_preview import live_preview_spec
+
+        try:
+            url = load_fixed_stream_url(args.proposal, expected_address=args.address)
+            if args.source == "rtsp":
+                parsed = urlsplit(url)
+                url = urlunsplit(("rtsp", f"{parsed.hostname}:8554", parsed.path, "", ""))
+            spec = live_preview_spec(
+                url,
+                source=args.source,
+                decoder=args.decoder,
+                fullscreen=args.fullscreen,
+                profile=args.profile,
+            )
+            payload = run_preview(
+                spec,
+                private_output=args.private_output,
+                sanitized_output=args.sanitized_output,
+                duration_seconds=args.duration,
+            )
+        except (OSError, PermissionError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"LIVE_PREVIEW_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if payload["decode_errors"] == 0 else 1
     if args.command == "secrets" and args.secrets_command == "configure-stream-key":
         if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
             print("REFUSED: RTMP stream-key setup requires the owner at an interactive TTY.")
@@ -1293,9 +1389,17 @@ def main(argv: list[str] | None = None) -> int:
 
             require_private_directory(args.output_dir)
             workflow = Pocket3RtmpWorkflow.load(args.state_file)
-            if workflow.phase != "waiting_for_rtmp":
+            reusable_phases = {
+                "waiting_for_rtmp",
+                "rtmp_connected",
+                "media_detected",
+                "sample_saved",
+                "stability_tested",
+                "completed",
+            }
+            if workflow.phase not in reusable_phases:
                 print(
-                    "REFUSED: full stream recovery requires waiting_for_rtmp state, "
+                    "REFUSED: full stream recovery requires an established RTMP workflow state, "
                     f"found {workflow.phase}"
                 )
                 return 4

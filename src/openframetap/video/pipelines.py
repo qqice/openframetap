@@ -61,10 +61,15 @@ def _sink_tokens(sink: str, *, fullscreen: bool, sync: str) -> tuple[str, ...]:
             f"sync={sync}",
         )
     if sink == "wayland":
-        tokens = ["waylandsink", f"sync={sync}"]
-        if fullscreen:
-            tokens.append("fullscreen=true")
-        return tuple(tokens)
+        nested = f"waylandsink fullscreen={'true' if fullscreen else 'false'} sync={sync}"
+        return (
+            "fpsdisplaysink",
+            "text-overlay=false",
+            f"video-sink={nested}",
+            "silent=false",
+            "fps-update-interval=500",
+            f"sync={sync}",
+        )
     raise ValueError(f"unsupported sink: {sink}")
 
 

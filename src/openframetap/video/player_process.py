@@ -108,3 +108,11 @@ class ProcessRegistry:
             if self.stop(name):
                 stopped.append(name)
         return stopped
+
+    def unregister(self, name: str) -> None:
+        processes = self.load()
+        processes.pop(name, None)
+        if processes:
+            self.save(processes)
+        else:
+            self.path.unlink(missing_ok=True)
