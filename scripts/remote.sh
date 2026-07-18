@@ -13,6 +13,9 @@ MEDIAMTX_CACHE="${OPENFRAMETAP_MEDIAMTX_CACHE:-$ROOT_DIR/artifacts/private/tool-
 LOCAL_PYTHON_BIN="${OPENFRAMETAP_LOCAL_PYTHON_BIN:-$ROOT_DIR/.venv/Scripts/python.exe}"
 LOCAL_FFMPEG_BIN="${OPENFRAMETAP_LOCAL_FFMPEG_BIN:-/c/ffmpeg/bin/ffmpeg.exe}"
 LOCAL_FFPROBE_BIN="${OPENFRAMETAP_LOCAL_FFPROBE_BIN:-/c/ffmpeg/bin/ffprobe.exe}"
+APPROVED_PREPARE_SHA256="e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6"
+APPROVED_PREPARE_DIR="$ROOT_DIR/artifacts/private/proposals/prepare-20260718T163611Z"
+RTMP_WORKFLOW_STATE="$ROOT_DIR/artifacts/private/pocket3-rtmp-workflow.json"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
 SCP_BIN="${OPENFRAMETAP_SCP_BIN:-scp}"
 SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
@@ -155,6 +158,7 @@ Usage:
   ./scripts/remote.sh rtmp-status
   ./scripts/remote.sh rtmp-stop
   ./scripts/remote.sh rtmp-self-test
+  ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
@@ -275,6 +279,57 @@ cd $REMOTE_DIR
     fi
     printf '[openframetap] PRIVATE_ARTIFACT_DIR=%s\n' "$private_dir"
     printf '[openframetap] SANITIZED_ARTIFACT_DIR=%s\n' "$sanitized_dir"
+    exit "$status"
+    ;;
+  pocket3-rtmp-send-approved-prepare)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: approved prepare send requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    proposal_json="$APPROVED_PREPARE_DIR/proposal-private.json"
+    proposal_bin="$APPROVED_PREPARE_DIR/proposal.bin"
+    [[ -f "$proposal_json" && -f "$proposal_bin" && -f "$RTMP_WORKFLOW_STATE" ]] || {
+      echo '[openframetap] Fixed approved proposal or workflow state is missing.' >&2
+      exit 2
+    }
+    actual_sha256="$(sha256sum "$proposal_bin" | awk '{print tolower($1)}')"
+    [[ "$actual_sha256" == "$APPROVED_PREPARE_SHA256" ]] || {
+      echo '[openframetap] Approved prepare proposal SHA-256 mismatch.' >&2
+      exit 5
+    }
+    grep -Fq "\"frame_sha256\": \"$APPROVED_PREPARE_SHA256\"" "$proposal_json" || {
+      echo '[openframetap] Private proposal JSON does not name the approved SHA-256.' >&2
+      exit 5
+    }
+    printf '%s\n' '[openframetap] APPROVED SINGLE COMMAND: prepare_to_live_stream (02/E1)'
+    printf '[openframetap] Fixed frame SHA-256: %s\n' "$APPROVED_PREPARE_SHA256"
+    printf '%s\n' '[openframetap] No Wi-Fi, stream-config, 02/8E, stop, or follow-up command is authorized.'
+    deploy || exit $?
+    run_remote rtmp-prepare-stage "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/approved-prepare
+chmod 700 artifacts/private artifacts/private/approved-prepare"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$proposal_json" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-prepare/proposal-private.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/pocket3-rtmp-workflow.json.new" || exit $?
+    run_remote rtmp-prepare-finalize "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/approved-prepare/proposal-private.json.new artifacts/private/approved-prepare/proposal-private.json
+mv artifacts/private/pocket3-rtmp-workflow.json.new artifacts/private/pocket3-rtmp-workflow.json
+chmod 600 artifacts/private/approved-prepare/proposal-private.json artifacts/private/pocket3-rtmp-workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    run_remote_interactive rtmp-prepare-send \
+      "cd $REMOTE_DIR && bash scripts/capture-pocket3.sh rtmp-proposal '$POCKET3_ADDRESS' 15 'artifacts/private/approved-prepare/proposal-private.json' 'artifacts/private/pocket3-rtmp-workflow.json'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ -n "$stem" ]] || { echo '[openframetap] Missing private RTMP prepare artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
     exit "$status"
     ;;
   doctor)

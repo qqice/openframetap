@@ -10,8 +10,10 @@ frame_hex="${4:-}"
 command_name="${5:-}"
 confirmed_sha256="${6:-}"
 required_incoming_hex="${7:-}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" ]] || {
-  echo 'operation must be listen, telemetry, pair-status, manual-frame, manual-pair-session, or experiment' >&2
+proposal_path="${4:-}"
+workflow_state_path="${5:-}"
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" ]] || {
+  echo 'unsupported capture operation' >&2
   exit 2
 }
 [[ -n "$address" ]] || { echo 'BLE address is required' >&2; exit 2; }
@@ -25,10 +27,17 @@ case "$operation" in
   manual-frame) prefix="pocket3-manual-frame" ;;
   manual-pair-session) prefix="pocket3-manual-pair-session" ;;
   experiment) prefix="pocket3-experiment" ;;
+  rtmp-proposal) prefix="pocket3-rtmp-prepare" ;;
 esac
 stem="$prefix-$stamp"
-output_dir="artifacts/$stem"
+if [[ "$operation" == "rtmp-proposal" ]]; then
+  artifact_relative="private/$stem"
+else
+  artifact_relative="$stem"
+fi
+output_dir="artifacts/$artifact_relative"
 mkdir -p "$output_dir"
+[[ "$operation" == "rtmp-proposal" ]] && chmod 700 "$output_dir"
 snoop_path="$output_dir/capture.btsnoop"
 text_path="$output_dir/btmon.txt"
 session_output="$output_dir/session-output.txt"
@@ -82,10 +91,13 @@ stop_btmon() {
 }
 
 finalize_checksums() {
-  if [[ "$operation" != "experiment" ]]; then
+  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" ]]; then
     return 0
   fi
   local names=(capture.btsnoop btmon.txt notifications.jsonl duml-frames.jsonl events.jsonl)
+  if [[ "$operation" == "rtmp-proposal" ]]; then
+    names+=(summary.json transmission.json session-output.txt)
+  fi
   local name
   : >"$output_dir/checksums.sha256"
   for name in "${names[@]}"; do
@@ -97,7 +109,7 @@ finalize_checksums() {
 
 emit_artifact_marker() {
   if [[ "$artifact_marker_printed" == "0" ]]; then
-    printf 'ARTIFACT_DIR=%s\n' "$stem"
+    printf 'ARTIFACT_DIR=%s\n' "$artifact_relative"
     artifact_marker_printed=1
   fi
 }
@@ -183,6 +195,20 @@ case "$operation" in
     experiment_status=${PIPESTATUS[0]}
     trap cleanup INT TERM EXIT
     exit "$experiment_status"
+    ;;
+  rtmp-proposal)
+    [[ -t 0 || "${OPENFRAMETAP_TEST_MODE:-0}" == "1" ]] || {
+      echo 'rtmp-proposal requires an interactive TTY' >&2
+      exit 4
+    }
+    [[ -f "$proposal_path" && -f "$workflow_state_path" ]] || {
+      echo 'fixed proposal or workflow state file is missing' >&2
+      exit 2
+    }
+    OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" -m openframetap pocket3 rtmp send-approved \
+      "$proposal_path" --address "$address" --seconds "$seconds" \
+      --output-dir "$output_dir" --state-file "$workflow_state_path" \
+      2>&1 | tee "$session_output"
     ;;
 esac
 session_status=${PIPESTATUS[0]}

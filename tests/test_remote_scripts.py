@@ -234,6 +234,62 @@ def test_pocket_experiment_requires_a_real_terminal() -> None:
     assert "Exit status: 37" not in result.stdout
 
 
+def test_approved_prepare_wrapper_requires_real_terminal_before_ssh() -> None:
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "pocket3-rtmp-send-approved-prepare"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert "requires the device owner at a real terminal" in result.stderr
+    assert "Exit status: 37" not in result.stdout
+
+
+def test_rtmp_proposal_capture_failure_cleans_btmon(tmp_path: Path) -> None:
+    start_file = tmp_path / "started"
+    stop_file = tmp_path / "stopped"
+    proposal = tmp_path / "proposal.json"
+    workflow = tmp_path / "workflow.json"
+    proposal.write_text("{}\n")
+    workflow.write_text("{}\n")
+    env = os.environ.copy()
+    env["OPENFRAMETAP_BTMON_BIN"] = shell_path(ROOT / "tests/fixtures/fake-btmon.sh")
+    env["OPENFRAMETAP_PYTHON_BIN"] = shell_path(ROOT / "tests/fixtures/fail-python.sh")
+    env["OPENFRAMETAP_BTMON_USE_SUDO"] = "0"
+    env["OPENFRAMETAP_TEST_MODE"] = "1"
+    env["BTMON_START_FILE"] = shell_path(start_file)
+    env["BTMON_STOP_FILE"] = shell_path(stop_file)
+    env["FAKE_PYTHON_STATUS"] = "31"
+    result = subprocess.run(
+        [
+            bash_path(),
+            "scripts/capture-pocket3.sh",
+            "rtmp-proposal",
+            "00:11:22:33:44:55",
+            "1",
+            shell_path(proposal),
+            shell_path(workflow),
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 31
+    assert "ARTIFACT_DIR=private/pocket3-rtmp-prepare-" in result.stdout
+    assert start_file.exists()
+    assert stop_file.read_text(encoding="utf-8") == "stopped"
+
+
 def test_experiment_tty_refusal_still_cleans_up_btmon(tmp_path: Path) -> None:
     start_file = tmp_path / "started"
     stop_file = tmp_path / "stopped"
