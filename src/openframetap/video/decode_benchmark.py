@@ -154,38 +154,85 @@ def run_decode_benchmark(input_path: Path, output_dir: Path) -> dict:
         results.append(result)
 
     ffmpeg = shutil.which("ffmpeg")
+    ffmpeg_capabilities = {
+        item.decoder_name: item
+        for item in capabilities
+        if item.framework == "ffmpeg" and item.available
+    }
     if ffmpeg:
-        argv = [
-            ffmpeg,
-            "-hide_banner",
-            "-benchmark",
-            "-v",
-            "info",
-            "-i",
-            str(input_path),
-            "-map",
-            "0:v:0",
-            "-an",
-            "-f",
-            "null",
-            "-",
-        ]
-        measured = _run_measured(
-            argv,
-            log_path=output_dir / "ffmpeg-software.log",
-            metrics_path=output_dir / "ffmpeg-software-metrics.jsonl",
-            timeout=30,
-        )
-        results.append(
-            {
-                "decoder": "h264",
-                "framework": "ffmpeg",
-                "hardware_or_software": "software",
-                **measured,
-                "test_result": "passed" if measured["exit_code"] == 0 else "failed",
-                "hardware_evidence": {"confirmed": False},
+        for decoder, kind in (
+            ("h264", "software"),
+            ("h264_rkmpp", "hardware"),
+            ("h264_v4l2m2m", "hardware"),
+        ):
+            if decoder not in ffmpeg_capabilities:
+                results.append(
+                    {
+                        "decoder": decoder,
+                        "framework": "ffmpeg",
+                        "hardware_or_software": kind,
+                        "test_result": "unavailable",
+                        "failure_reason": "decoder unavailable",
+                    }
+                )
+                continue
+            argv = [
+                ffmpeg,
+                "-hide_banner",
+                "-benchmark",
+                "-v",
+                "info",
+                "-c:v",
+                decoder,
+                "-i",
+                str(input_path),
+                "-map",
+                "0:v:0",
+                "-an",
+                "-progress",
+                "pipe:1",
+                "-nostats",
+                "-f",
+                "null",
+                "-",
+            ]
+            log_path = output_dir / f"ffmpeg-{decoder}.log"
+            measured = _run_measured(
+                argv,
+                log_path=log_path,
+                metrics_path=output_dir / f"ffmpeg-{decoder}-metrics.jsonl",
+                timeout=30,
+            )
+            log_text = log_path.read_text(encoding="utf-8", errors="replace")
+            hardware_evidence = {
+                "explicit_decoder": decoder in argv,
+                "decoder_named_in_log": decoder in log_text,
+                "software_fallback_named": kind == "hardware" and "h264 (native)" in log_text,
+                "mpp_device_present": Path("/dev/mpp_service").exists(),
+                "confirmed": (
+                    kind == "hardware"
+                    and decoder in argv
+                    and decoder in log_text
+                    and measured["exit_code"] == 0
+                    and (measured["decoded_frames"] or 0) > 0
+                    and "h264 (native)" not in log_text
+                ),
             }
-        )
+            passed = (
+                measured["exit_code"] == 0
+                and (measured["decoded_frames"] or 0) > 0
+                and (kind != "hardware" or hardware_evidence["confirmed"])
+            )
+            results.append(
+                {
+                    "decoder": decoder,
+                    "framework": "ffmpeg",
+                    "hardware_or_software": kind,
+                    **measured,
+                    "test_result": "passed" if passed else "failed",
+                    "hardware_evidence": hardware_evidence,
+                }
+            )
     else:
         results.append(
             {

@@ -839,8 +839,8 @@ chmod 700 artifacts/private/video-input artifacts/private/$stem"
 cd $REMOTE_DIR
 mv '$remote_sample.new' '$remote_sample'
 chmod 600 '$remote_sample'
+trap \"rm -f '$remote_sample'\" EXIT INT TERM
 .venv/bin/python -m openframetap video benchmark --input '$remote_sample' --all-decoders --output-dir 'artifacts/private/$stem'
-rm -f '$remote_sample'
 printf 'ARTIFACT_DIR=private/$stem\n'"
     status=$?
     pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?

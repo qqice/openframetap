@@ -52,7 +52,13 @@ def profile_parameters(profile: PipelineProfile) -> dict:
 
 def _sink_tokens(sink: str, *, fullscreen: bool, sync: str) -> tuple[str, ...]:
     if sink == "fakesink":
-        return ("fpsdisplaysink", "text-overlay=false", "video-sink=fakesink", f"sync={sync}")
+        return (
+            "fpsdisplaysink",
+            "text-overlay=false",
+            "video-sink=fakesink",
+            "fps-update-interval=50",
+            f"sync={sync}",
+        )
     if sink == "wayland":
         tokens = ["waylandsink", f"sync={sync}"]
         if fullscreen:
@@ -75,6 +81,7 @@ def offline_pipeline(
         "flvdemux",
         "queue",
         "h264parse",
+        "capsfilter",
         decoder,
         "fpsdisplaysink" if sink == "fakesink" else "waylandsink",
     )
@@ -92,6 +99,9 @@ def offline_pipeline(
         *params["queue"],
         "!",
         "h264parse",
+        "config-interval=-1",
+        "!",
+        "video/x-h264,stream-format=byte-stream,alignment=au",
         "!",
         decoder,
         "!",
@@ -114,7 +124,7 @@ def live_pipeline(
     params = profile_parameters(profile)
     if source == "rtmp":
         source_tokens = ("rtmpsrc", f"location={url}", "!", "flvdemux", "name=demux", "demux.video")
-        elements = ("rtmpsrc", "flvdemux", "queue", "h264parse", decoder)
+        elements = ("rtmpsrc", "flvdemux", "queue", "h264parse", "capsfilter", decoder)
     elif source == "rtsp":
         source_tokens = (
             "rtspsrc",
@@ -125,7 +135,7 @@ def live_pipeline(
             "!",
             "rtph264depay",
         )
-        elements = ("rtspsrc", "rtph264depay", "queue", "h264parse", decoder)
+        elements = ("rtspsrc", "rtph264depay", "queue", "h264parse", "capsfilter", decoder)
     else:
         raise ValueError(f"unsupported live source: {source}")
     argv = (
@@ -138,6 +148,8 @@ def live_pipeline(
         "!",
         "h264parse",
         "config-interval=-1",
+        "!",
+        "video/x-h264,stream-format=byte-stream,alignment=au",
         "!",
         decoder,
         "!",
