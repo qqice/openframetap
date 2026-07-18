@@ -166,13 +166,23 @@ case "$operation" in
       2>&1 | tee "$session_output"
     ;;
   experiment)
-    [[ -t 0 ]] || {
+    [[ -t 0 || "${OPENFRAMETAP_TEST_MODE:-0}" == "1" ]] || {
       echo 'experiment requires an interactive TTY' >&2
       exit 4
     }
-    "$PYTHON_BIN" -m openframetap pocket3 experiment \
-      --address "$address" --duration "$seconds" --output "$output_dir" \
-      2>&1 | tee "$session_output"
+    # The interactive Python child must receive Ctrl+C and finish its async
+    # disconnect/finalize path.  The wrapper ignores SIGINT only while waiting
+    # for that child; the subshell restores SIGINT before exec.  This prevents
+    # the outer cleanup trap from exiting before session.json is flushed.
+    trap '' INT
+    (
+      trap - INT
+      exec "$PYTHON_BIN" -m openframetap pocket3 experiment \
+        --address "$address" --duration "$seconds" --output "$output_dir"
+    ) 2>&1 | tee "$session_output"
+    experiment_status=${PIPESTATUS[0]}
+    trap cleanup INT TERM EXIT
+    exit "$experiment_status"
     ;;
 esac
 session_status=${PIPESTATUS[0]}

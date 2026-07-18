@@ -52,16 +52,25 @@ q  stop and save
 """
 
 
-PROCEDURE_GUIDE = """Recommended sequence (all movement is performed manually by the owner):
-A. Place the Pocket on a stable surface. Press 0, wait >=10 s, press s,
-   wait >=10 s, then press e.
-B. Press 1, slowly yaw the body left 30-45 degrees, press s while holding,
-   press 7 before returning, press s at neutral, then e. Repeat with key 2.
-C. Repeat the same start/hold/return markers with keys 3 and 4 for pitch.
-D. Repeat with keys 5 and 6 for small clockwise/counter-clockwise roll.
-E. Optionally press 8 immediately before a safe recenter action performed on
-   the Pocket itself. The program never sends that action.
-F. Press 9 near the beginning and end to enter the displayed battery percent.
-Press m to annotate a skipped or unusual step. Press q to stop and save.
-The duration countdown starts only after key r.
+PROCEDURE_GUIDE = """Exact body-motion timeline after key r (about 155 seconds):
+00:02  press 9; enter the displayed battery percent and press Enter
+00:07  press 0; leave the complete Pocket body stationary for 10 seconds
+00:17  press s; remain stationary for another 10 seconds
+00:27  press e
+00:30  press 1; rotate the complete body left over 5 seconds
+00:35  press s; hold the left-yaw pose for 5 seconds
+00:40  press 7; return to neutral over 5 seconds
+00:45  press s; hold neutral for 3 seconds; at 00:48 press e
+00:50  press 2; repeat the same 5/5/5/3-second pattern for right yaw
+01:10  press 3; repeat the same pattern for body pitch up
+01:30  press 4; repeat the same pattern for body pitch down
+01:50  press 5; repeat the same pattern for small clockwise body roll
+02:10  press 6; repeat the same pattern for small counter-clockwise body roll
+02:30  press 9; enter the displayed battery percent and press Enter
+02:35  press q to stop, save, disconnect, and checksum the evidence
+
+For every motion: start key -> move 5 s -> s -> hold 5 s -> 7 -> return 5 s
+-> s -> neutral 3 s -> e. Move the complete Pocket body; do not use the
+joystick, touch-screen rotation mode, key 8, or direct force on the gimbal head.
+The 240-second limit starts only after key r and leaves about 85 seconds of margin.
 """

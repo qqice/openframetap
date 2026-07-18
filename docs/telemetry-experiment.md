@@ -46,6 +46,25 @@ q  stop and save
 
 The 180-second countdown begins only after `r`, so reading the guide and positioning the Pocket does not consume the controlled-action interval.
 
+For a 240-second body-motion session, use this exact schedule after `r`:
+
+```text
+00:02  9, enter starting battery
+00:07  0, stationary 10 s
+00:17  s, stationary another 10 s
+00:27  e
+00:30  1, yaw left: move 5 s / s / hold 5 s / 7 / return 5 s / s / neutral 3 s / e
+00:50  2, repeat for yaw right
+01:10  3, repeat for pitch up
+01:30  4, repeat for pitch down
+01:50  5, repeat for clockwise roll
+02:10  6, repeat for counter-clockwise roll
+02:30  9, enter ending battery
+02:35  q, save and stop
+```
+
+All six actions move the complete Pocket body. Do not use the joystick, touch-screen rotation mode, key `8`, or direct force on the gimbal head.
+
 Start and end with key `9` and enter the integer displayed on the Pocket screen. Use `0`, wait at least 10 seconds, `s`, wait another 10 seconds, then `e` for the baseline. For each yaw, pitch, and roll direction, mark the start, move slowly by hand, mark `s` while holding, press `7` before returning, mark `s` after reaching neutral, and press `e`. Key `8` only marks an action the owner performs on the Pocket itself. Key `m` records a skipped step or irregularity.
 
 Pressing `q` or Ctrl+C stops the notification subscription, disconnects BLE, stops `btmon`, flushes JSONL and session files, and generates checksums. The shell trap also removes the recorded `btmon` PID. A session with any FFF5 write count is a safety failure and must not be analyzed.

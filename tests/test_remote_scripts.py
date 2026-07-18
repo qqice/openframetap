@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -259,6 +260,48 @@ def test_experiment_tty_refusal_still_cleans_up_btmon(tmp_path: Path) -> None:
     assert start_file.exists()
     assert stop_file.read_text(encoding="utf-8") == "stopped"
     assert "ARTIFACT_DIR=pocket3-experiment-" in result.stdout
+
+
+def test_experiment_ctrl_c_waits_for_session_save_and_cleans_btmon(tmp_path: Path) -> None:
+    start_file = tmp_path / "started"
+    stop_file = tmp_path / "stopped"
+    env = os.environ.copy()
+    env["OPENFRAMETAP_BTMON_BIN"] = shell_path(ROOT / "tests/fixtures/fake-btmon.sh")
+    env["OPENFRAMETAP_PYTHON_BIN"] = shell_path(
+        ROOT / "tests/fixtures/interrupt-save-python.sh"
+    )
+    env["OPENFRAMETAP_BTMON_USE_SUDO"] = "0"
+    env["OPENFRAMETAP_TEST_MODE"] = "1"
+    env["BTMON_START_FILE"] = shell_path(start_file)
+    env["BTMON_STOP_FILE"] = shell_path(stop_file)
+    before = set((ROOT / "artifacts").glob("pocket3-experiment-*"))
+    result = subprocess.run(
+        [
+            bash_path(),
+            "scripts/capture-pocket3.sh",
+            "experiment",
+            "00:11:22:33:44:55",
+            "1",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    after = set((ROOT / "artifacts").glob("pocket3-experiment-*"))
+    created = after - before
+    assert result.returncode == 130
+    assert len(created) == 1
+    output_dir = created.pop()
+    session = json.loads((output_dir / "session.json").read_text(encoding="utf-8"))
+    assert session["saved_after_interrupt"] is True
+    assert session["fff5_write_count"] == 0
+    assert (output_dir / "message-counts.json").exists()
+    assert (output_dir / "checksums.sha256").exists()
+    assert start_file.exists()
+    assert stop_file.read_text(encoding="utf-8") == "stopped"
 
 
 def test_analyze_wrapper_rejects_unsafe_directory_before_ssh() -> None:
