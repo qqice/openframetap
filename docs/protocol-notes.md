@@ -70,7 +70,9 @@ Offline analysis groups each command by payload length before enumerating bounde
 
 The analyzer refuses a session whose FFF5 counter is nonzero or whose raw checksum manifest is incomplete or changed. Results are written only below `analysis/`; a second checksum verification proves the raw evidence remained unchanged. `02/80` remains a low-confidence camera-status family and its old `pairing_started` interpretation remains rejected.
 
-As of this implementation commit, the new controlled physical experiment has not been started. Therefore no existing `04/05`, `04/27`, `04/1C`, `04/38`, or `0D/02` candidate has been promoted by this tooling yet.
+The complete controlled body-motion session is archived at `artifacts/remote/pocket3-experiment-20260718-231048/`; detailed statistics and rejected layouts are in `telemetry-findings.md`. It recorded 10,220 CRC-valid frames with zero reassembly failures, zero active disconnects, two CCCD operations, and exactly zero FFF5 writes. Screen observations 74 and 72 matched `0D/02` offset 20 exactly, promoting that candidate to high confidence for the observed 34-byte Pocket 3 layout. Controlled direction changes support medium-confidence yaw and roll candidates at `04/05` int16 LE offsets 16 and 22 and a low-confidence pitch candidate at offset 20, but no physical scale is selected. `04/27` behaved as a sparse state flag, while `04/1C` and `04/38` stayed constant.
+
+Analysis was performed on the Windows source host with ROCK monotonic timestamps at Git `932041e192c5ec22d3f22a23fa133c83c917e6da`. The five raw evidence hashes matched both before and after the analysis. No raw artifact or device address is committed.
 
 ## Research inputs
 
