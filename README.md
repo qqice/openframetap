@@ -37,6 +37,12 @@ The manual single-frame writer is documented separately and must only be invoked
 ./scripts/remote.sh pocket3-send-frame artifacts/local/proposed-pairing-frame.bin set_pairing_pin 20
 ```
 
+For a transaction whose sequence is valid only inside one BLE connection, the owner may use the TTY-only workflow. It independently prompts for every frame SHA and cannot be invoked through a pipe or non-interactive Codex command:
+
+```bash
+./scripts/remote.sh pocket3-manual-pair-session 60
+```
+
 `setup-python` creates only `~/openframetap-runtime/.venv` and installs this project plus Bleak there. It never uses `sudo pip` or changes the system Python environment.
 
 ## Development

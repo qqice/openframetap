@@ -40,6 +40,10 @@ The Pocket returned CRC-valid `550f04a2070272aac0074500020069` approximately 175
 
 The repetition is a capture fact; interpreting it as a request awaiting the Mimo-style `C0/07/46 payload 00` ACK is a capture inference corroborated by the published Mimo trace and `djictl`. The next offline candidate mirrors sequence `01 00`, but the manual runtime additionally requires the complete corresponding incoming approval frame to be reobserved before it can write. If that exact prerequisite is absent, the attempt performs zero FFF5 writes.
 
+The subsequent guarded stage-one invocation is archived at `artifacts/remote/pocket3-manual-frame-20260718-211342/`. A new BLE connection delivered 397 CRC-valid passive frames but no `07/45` or `07/46` pairing traffic. The exact prerequisite was absent, so the confirmed stage-one candidate was not written: `writes_attempted=0`, `command_sent=null`, and no FFF5 ATT Write Command appears. This is a safety success and evidence that the approval transaction was connection/session-bound.
+
+The remaining allowed attempt therefore uses an owner-operated interactive TTY while preserving the same BLE connection. Every candidate is still independently displayed and confirmed by its full SHA-256; response callbacks only enqueue evidence and never write. A mismatch or declined hash stops the state machine.
+
 Pairing is DJI application state, not BlueZ bonding. The offline state machine distinguishes an ordinary BLE connection, a DJI pairing-status response, a Pocket-screen approval, and stage-one/stage-two evidence. It emits `propose_*` actions only; it does not call the transport. Each proposed frame requires a separate interactive full-SHA confirmation by the owning user. It permits at most two explicitly initiated attempts, safely ignores an exact duplicate status after the state has advanced, stops on an unexpected payload, timeout, disconnect, or cancellation, and does not guess alternate IDs or payloads.
 
 See `reference-matrix.md` for public-source agreement, contradictions, and confidence labels.

@@ -66,6 +66,29 @@ Because the sequence may be session-specific, the runtime must reobserve the com
 
 If the prerequisite changes or is absent, the command captures evidence and exits with zero FFF5 writes. Even after a successful stage-one ACK, it cannot automatically send stage two.
 
+The owner executed this guarded command after the original connection had closed. The prerequisite was no longer present, so the runtime timed out after capturing 397 valid passive frames and performed zero FFF5 writes. This verifies that an approval transaction cannot safely be carried across BLE sessions.
+
+## Session-bound final attempt
+
+Completing a transaction with a session-specific approval sequence requires keeping one BLE connection open. The owner-only interactive workflow still requires a separate full SHA-256 for every frame:
+
+```bash
+./scripts/remote.sh pocket3-manual-pair-session 60
+```
+
+Safety properties:
+
+- It refuses non-TTY or piped execution and first requires the owner to type `RUN`.
+- The reviewed `set_pairing_pin` frame is displayed and requires its complete SHA-256.
+- An exact `C0/07/45` response is required. Any different address, sequence, flags, command, or payload stops the session.
+- If confirmation is required, the terminal pauses while the owner confirms on the Pocket screen.
+- Stage one is generated from the exact live `40/07/46` approval sequence in that still-open connection, displayed in full, and separately confirmed by SHA-256.
+- Stage two is then displayed in full and separately confirmed. Declining or mistyping either hash stops before that frame.
+- No notification callback sends data; no frame is selected without a human prompt; no command outside the three-entry pairing allowlist can be sent.
+- After the prompts it only records the stage-two response, if any, and passively listens for the requested telemetry duration.
+
+This workflow constitutes the second and final permitted application-pairing attempt. Codex must not invoke it.
+
 ## State separation
 
 BlueZ pairing/bonding is not requested. The single frame targets DJI application-layer pairing. A Pocket-screen confirmation is a separate human action. Seeing a BLE connection, continuous telemetry, or an unchanged connection is not by itself evidence that DJI application pairing succeeded.

@@ -37,7 +37,7 @@ This matrix separates public-source conclusions from OpenFrameTap capture eviden
 | Conclusion | Sources and agreement | Confidence | Local hardware status |
 | --- | --- | --- | --- |
 | Pairing status command is `cmdSet 0x07`, `cmdId 0x45`; captured response flags are `0xC0`, sender/receiver `0x07/0x02`, with payload `00 01` (already paired) or `00 02` (confirmation required). | `djictl`, `lib-osmo-ble`, and published captures agree on command and response values. | High | Local Pocket returned exact `C0/07/45`, sequence `72AA`, payload `00 02` after the human-executed request. |
-| Approval notification is `0x400746` with payload `01`; stage-one app ACK is `0xC00746` with payload `00`. | `djictl` and published captures agree. | High | Local Pocket sent ten `40/07/46 payload 01` requests after screen confirmation. Stage-one ACK is generated but not yet transmitted. |
+| Approval notification is `0x400746` with payload `01`; stage-one app ACK is `0xC00746` with payload `00`. | `djictl` and published captures agree. | High | Local Pocket sent ten `40/07/46 payload 01` requests after screen confirmation. A later new connection contained no approval request, and the exact-prerequisite guard correctly caused zero stage-one writes. |
 | Stage two is app `0x02` to pairer `0x88`, flags `0x40`, `cmdSet/cmdId 0x00/0x32`, payload `31 31 00 00 00`. | `djictl` and a published full capture agree; OpenFrameTap reproduces captured frame `551204c7028874aa4000323131000000426a`. | High | Offline/capture verified only. |
 | Before the first DUML request, `djictl` writes `01 00` to its pairing-request characteristic (FFF4/value handle `0x002e`). | `djictl` and derived `lib-osmo-ble` do this. Moblin and `node-osmo` do not show the same trigger. | Low/contested | OpenFrameTap will not send this during passive listen or before approval. |
 | `set_pairing_pin` request payload format and default PIN. | `djictl` uses packed string `001749319286102` plus packed PIN `5160`; `lib-osmo-ble` retains the identifier but defaults to `love`. Moblin and `node-osmo` instead prepend byte `20` plus ASCII `284ae5b8d76b3375a04a6417ad71bea3`, then a packed PIN; Moblin defaults to `mbln`. These may not be independent implementations. | High for the reviewed identifier + `5160` frame on this Pocket; no universal default claim | Local hardware returned the expected matching pairing-status response and subsequent approval requests. |
@@ -60,8 +60,8 @@ SUBSCRIBED --human executes one confirmed candidate--> WAITING_STATUS
 WAITING_STATUS --00 01--> PAIRED (already paired)
 WAITING_STATUS --00 02--> WAITING_DEVICE_CONFIRMATION
 WAITING_DEVICE_CONFIRMATION --400746 payload 01--> PROPOSE_STAGE1
-PROPOSE_STAGE1 --separate human-confirmed frame + evidence--> PROPOSE_STAGE2
-PROPOSE_STAGE2 --separate human-confirmed frame + evidence--> PAIRED
+PROPOSE_STAGE1 --same connection + separate human-confirmed frame--> PROPOSE_STAGE2
+PROPOSE_STAGE2 --same connection + separate human-confirmed frame--> PAIRED
 
 Any unexpected payload, timeout, disconnect, or user cancellation --> stop/fail
 No transition automatically invokes a BLE write
