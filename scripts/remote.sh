@@ -173,6 +173,7 @@ Usage:
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-recovery
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-wifi-recovery
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
+  ./scripts/remote.sh pocket3-rtmp-configure-stream-key
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
@@ -578,6 +579,16 @@ chmod 600 artifacts/private/approved-prepare-wifi-recovery/*.json artifacts/priv
     deploy || exit $?
     run_remote_interactive rtmp-wifi-secret-setup \
       "cd $REMOTE_DIR && OPENFRAMETAP_USER_INITIATED=1 .venv/bin/python -m openframetap secrets configure-wifi"
+    ;;
+  pocket3-rtmp-configure-stream-key)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: RTMP stream-key setup requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    deploy || exit $?
+    run_remote_interactive rtmp-stream-key-setup \
+      "cd $REMOTE_DIR && OPENFRAMETAP_USER_INITIATED=1 .venv/bin/python -m openframetap secrets configure-stream-key"
     ;;
   pocket3-rtmp-propose-wifi)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }

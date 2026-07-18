@@ -199,6 +199,56 @@ def store_wifi_provisioning_secrets(
     return backup
 
 
+def store_rtmp_stream_key(path: Path, stream_key: str) -> Path:
+    """Atomically add or replace the RTMP key while preserving Wi-Fi values."""
+
+    path = path.expanduser().resolve()
+    if (
+        not stream_key
+        or stream_key != stream_key.strip()
+        or stream_key[:1] in {'"', "'"}
+        or stream_key[-1:] in {'"', "'"}
+        or any(character in stream_key for character in "/?#\\\r\n")
+        or len(stream_key.encode("utf-8")) > 128
+    ):
+        raise SecretConfigurationError(
+            "RTMP stream key must be one unquoted path segment of at most 128 bytes"
+        )
+    if path.is_symlink():
+        raise SecretConfigurationError("secret file cannot be a symbolic link")
+    values = _parse_env_file(path)
+    missing = [name for name in SECRET_NAMES[:2] if not values.get(name)]
+    if missing:
+        raise SecretConfigurationError(
+            "existing secret file is missing Wi-Fi values: " + ", ".join(missing)
+        )
+    backup = path.with_name(path.name + ".bak")
+    shutil.copyfile(path, backup)
+    if os.name != "nt":
+        backup.chmod(0o600)
+    content = (
+        f"OPENFRAMETAP_WIFI_SSID={values['OPENFRAMETAP_WIFI_SSID']}\n"
+        f"OPENFRAMETAP_WIFI_PSK={values['OPENFRAMETAP_WIFI_PSK']}\n"
+        f"OPENFRAMETAP_RTMP_STREAM_KEY={stream_key}\n"
+    ).encode("utf-8")
+    temporary = path.with_name(path.name + ".new")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    if os.name != "nt":
+        temporary.chmod(0o600)
+    temporary.replace(path)
+    if os.name != "nt":
+        path.chmod(0o600)
+    return backup
+
+
 def load_livestream_secrets(
     *, environ: Mapping[str, str] | None = None, secret_file: Path | None = None
 ) -> LivestreamSecrets:

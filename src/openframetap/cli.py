@@ -302,11 +302,37 @@ def build_parser() -> argparse.ArgumentParser:
     configure_wifi.add_argument(
         "--path", type=Path, default=Path("~/.config/openframetap/secrets.env")
     )
+    configure_stream_key = secret_commands.add_parser(
+        "configure-stream-key",
+        help="prompt without echo and preserve Wi-Fi values while adding RTMP key",
+    )
+    configure_stream_key.add_argument(
+        "--path", type=Path, default=Path("~/.config/openframetap/secrets.env")
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "secrets" and args.secrets_command == "configure-stream-key":
+        if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
+            print("REFUSED: RTMP stream-key setup requires the owner at an interactive TTY.")
+            return 4
+        import getpass
+
+        from openframetap.network.secrets import store_rtmp_stream_key
+
+        stream_key = getpass.getpass("RTMP stream key (input hidden): ")
+        confirmation = getpass.getpass("Repeat RTMP stream key (input hidden): ")
+        if stream_key != confirmation:
+            print("REFUSED: stream-key confirmation did not match; no file was changed.")
+            return 4
+        path = args.path.expanduser()
+        backup = store_rtmp_stream_key(path, stream_key)
+        print(f"RTMP stream key stored privately: {path} mode=0600")
+        print(f"Previous private file backed up: {backup} mode=0600")
+        print("Existing Wi-Fi values were preserved; no Pocket connection or BLE write occurred.")
+        return 0
     if args.command == "secrets" and args.secrets_command == "configure-wifi":
         if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
             print("REFUSED: Wi-Fi secret setup requires the owner at an interactive TTY.")

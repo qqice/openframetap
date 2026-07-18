@@ -19,6 +19,7 @@ from openframetap.network.secrets import (
     require_private_directory,
     require_private_file,
     store_wifi_provisioning_secrets,
+    store_rtmp_stream_key,
 )
 
 
@@ -106,3 +107,32 @@ def test_wifi_secret_file_is_private_and_backed_up_without_value_logging(
     assert backup is not None and backup.is_file()
     assert "Fixture5G" in backup.read_text(encoding="utf-8")
     assert "FixtureGuest" in path.read_text(encoding="utf-8")
+
+
+def test_stream_key_update_preserves_wifi_and_creates_private_backup(tmp_path: Path) -> None:
+    path = tmp_path / "secrets.env"
+    store_wifi_provisioning_secrets(
+        path, WifiProvisioningSecrets("Fixture5G", "fixture-password")
+    )
+    backup = store_rtmp_stream_key(path, "private-stream-key")
+    assert backup.is_file()
+    current = load_livestream_secrets(secret_file=path, environ={})
+    assert current.ssid == "Fixture5G"
+    assert current.psk == "fixture-password"
+    assert current.stream_key == "private-stream-key"
+    assert "OPENFRAMETAP_RTMP_STREAM_KEY" not in backup.read_text(encoding="utf-8")
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert backup.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("value", ["", "bad/key", "bad?key", " bad", "bad\nkey"])
+def test_stream_key_update_rejects_unsafe_values(tmp_path: Path, value: str) -> None:
+    path = tmp_path / "secrets.env"
+    store_wifi_provisioning_secrets(
+        path, WifiProvisioningSecrets("Fixture5G", "fixture-password")
+    )
+    before = path.read_bytes()
+    with pytest.raises(SecretConfigurationError):
+        store_rtmp_stream_key(path, value)
+    assert path.read_bytes() == before
