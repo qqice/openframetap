@@ -23,6 +23,7 @@ from openframetap.session import manual_send_pocket3_frame
 
 LIVE_FIXTURE = Path(__file__).parent / "fixtures" / "live_fff4_frames.json"
 PAIRING_FIXTURE = Path(__file__).parent / "fixtures" / "manual_pairing_frames.json"
+PAIRED_FIXTURE = Path(__file__).parent / "fixtures" / "paired_session_frames.json"
 
 
 def test_ble_error_categories() -> None:
@@ -431,6 +432,32 @@ def test_manual_pairing_fixture_replay(entry: dict) -> None:
     assert decoded.message_type == entry["expected_type"]
     field, expected = entry["expected_field"]
     assert decoded.fields[field] == expected
+
+
+@pytest.mark.parametrize(
+    "entry",
+    json.loads(PAIRED_FIXTURE.read_text(encoding="utf-8"))["frames"],
+    ids=lambda entry: entry["name"],
+)
+def test_paired_session_fixture_replay(entry: dict) -> None:
+    frame = decode_duml_frame(bytes.fromhex(entry["hex"]))
+    assert frame.crc8_valid and frame.crc16_valid
+    decoded = decode_telemetry(frame)
+    assert decoded.message_type == entry["expected_type"]
+    field, expected = entry["expected_field"]
+    assert decoded.fields[field] == expected
+
+
+def test_02_80_is_not_claimed_as_pairing_started() -> None:
+    frame = decode_duml_frame(
+        bytes.fromhex(
+            "554904930102411000028001048000010000000000000000000000000000000000000000000000000000000246000001000000000000000000000000000000000000000001000017fc"
+        )
+    )
+    decoded = decode_telemetry(frame)
+    assert decoded.message_type == "camera_status_02_80_candidate"
+    assert decoded.confidence == "low"
+    assert decoded.fields["pairing_started_interpretation_rejected"] is True
 
 
 def test_recorder_serializes_notification_frame_and_summary(tmp_path) -> None:

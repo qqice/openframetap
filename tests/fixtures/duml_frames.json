@@ -10,11 +10,12 @@
   },
   "frames": [
     {
-      "name": "pairing_started_notification",
+      "name": "source_labeled_pairing_started_notification",
       "source_frame_number": 596,
       "direction": "Pocket-to-app FFF4 notification",
       "hex": "554904930102411000028001048000010000000000000000000000000000000000000000000000000000000246000001000000000000000000000000000000000000000001000017fc",
-      "expected": {"length": 73, "sender": 1, "receiver": 2, "sequence": 16656, "flags": 0, "cmd_set": 2, "cmd_id": 128}
+      "expected": {"length": 73, "sender": 1, "receiver": 2, "sequence": 16656, "flags": 0, "cmd_set": 2, "cmd_id": 128},
+      "interpretation_note": "Upstream label retained as provenance only; the local paired-session capture rejects pairing_started as a semantic decode."
     },
     {
       "name": "gimbal_status_candidate",

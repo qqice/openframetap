@@ -65,11 +65,14 @@ def decode_telemetry(frame: DumlFrame) -> TelemetryDecode:
         )
     if key == (0x02, 0x80):
         return TelemetryDecode(
-            "pairing_started",
+            "camera_status_02_80_candidate",
             True,
-            "high",
-            "capture inference",
-            {"status_bytes_hex": raw},
+            "low",
+            "local capture correction",
+            {
+                "semantic_fields_parsed": False,
+                "pairing_started_interpretation_rejected": True,
+            },
             raw,
         )
     if key == (0x00, 0x81):

@@ -1,0 +1,37 @@
+{
+  "fixture_schema": 1,
+  "source": {
+    "capture_directory": "artifacts/remote/pocket3-manual-pair-session-20260718-213000",
+    "source_file": "duml-frames.jsonl",
+    "source_sha256": "8b6fd9c2ebd8e0e9e4eeff376689287478d30a4de6b75edf97b429f7add28b49",
+    "direction": "Pocket-to-OpenFrameTap FFF4 notification",
+    "pairing_result": "already_paired",
+    "automatic_follow_up_frames": 0
+  },
+  "frames": [
+    {
+      "name": "explicit_already_paired_status",
+      "wall_timestamp": "2026-07-18T13:30:06.735927+00:00",
+      "monotonic_ns": 13397063816001,
+      "hex": "550f04a2070272aac0074500019b5b",
+      "expected_type": "pairing_status",
+      "expected_field": ["status", "already_paired"]
+    },
+    {
+      "name": "paired_session_battery_candidate",
+      "wall_timestamp": "2026-07-18T13:30:02.371096+00:00",
+      "monotonic_ns": 13392698965865,
+      "hex": "552f04630502df33000d02000a1100000000000000000000000000008601006400000000000020040000000001af7a",
+      "expected_type": "battery_status_candidate",
+      "expected_field": ["battery_percent_candidate", 100]
+    },
+    {
+      "name": "paired_session_device_info_candidate",
+      "wall_timestamp": "2026-07-18T13:30:02.835417+00:00",
+      "monotonic_ns": 13393163296992,
+      "hex": "554d04a848020858400081686732313200000000000000000000000000000000000000000000000000000002080000000000000208000000000000000000000000000000000000000000006936",
+      "expected_type": "device_info_candidate",
+      "expected_field": ["model_or_product_ascii", "hg212"]
+    }
+  ]
+}
