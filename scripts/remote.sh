@@ -293,6 +293,10 @@ cd $REMOTE_DIR
       echo '[openframetap] Fixed approved proposal or workflow state is missing.' >&2
       exit 2
     }
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"prepare_proposed"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: the approved prepare proposal is already consumed or no longer pending.' >&2
+      exit 4
+    }
     actual_sha256="$(sha256sum "$proposal_bin" | awk '{print tolower($1)}')"
     [[ "$actual_sha256" == "$APPROVED_PREPARE_SHA256" ]] || {
       echo '[openframetap] Approved prepare proposal SHA-256 mismatch.' >&2
