@@ -10,8 +10,8 @@ frame_hex="${4:-}"
 command_name="${5:-}"
 confirmed_sha256="${6:-}"
 required_incoming_hex="${7:-}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" ]] || {
-  echo 'operation must be listen, telemetry, pair-status, manual-frame, or manual-pair-session' >&2
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" ]] || {
+  echo 'operation must be listen, telemetry, pair-status, manual-frame, manual-pair-session, or experiment' >&2
   exit 2
 }
 [[ -n "$address" ]] || { echo 'BLE address is required' >&2; exit 2; }
@@ -24,6 +24,7 @@ case "$operation" in
   pair-status) prefix="pocket3-pair-status" ;;
   manual-frame) prefix="pocket3-manual-frame" ;;
   manual-pair-session) prefix="pocket3-manual-pair-session" ;;
+  experiment) prefix="pocket3-experiment" ;;
 esac
 stem="$prefix-$stamp"
 output_dir="artifacts/$stem"
@@ -37,6 +38,7 @@ BTMON_USE_SUDO="${OPENFRAMETAP_BTMON_USE_SUDO:-auto}"
 btmon_pid=""
 btmon_launcher_pid=""
 btmon_pid_path="$output_dir/.btmon.pid"
+artifact_marker_printed=0
 
 if [[ "$BTMON_USE_SUDO" == "auto" ]]; then
   if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
@@ -79,10 +81,33 @@ stop_btmon() {
   btmon_launcher_pid=""
 }
 
+finalize_checksums() {
+  if [[ "$operation" != "experiment" ]]; then
+    return 0
+  fi
+  local names=(capture.btsnoop btmon.txt notifications.jsonl duml-frames.jsonl events.jsonl)
+  local name
+  : >"$output_dir/checksums.sha256"
+  for name in "${names[@]}"; do
+    if [[ -f "$output_dir/$name" ]]; then
+      (cd "$output_dir" && sha256sum "$name") >>"$output_dir/checksums.sha256"
+    fi
+  done
+}
+
+emit_artifact_marker() {
+  if [[ "$artifact_marker_printed" == "0" ]]; then
+    printf 'ARTIFACT_DIR=%s\n' "$stem"
+    artifact_marker_printed=1
+  fi
+}
+
 cleanup() {
   local status=$?
   trap - INT TERM EXIT
   stop_btmon
+  finalize_checksums
+  emit_artifact_marker
   exit "$status"
 }
 trap cleanup INT TERM EXIT
@@ -140,11 +165,21 @@ case "$operation" in
       "$address" --telemetry-seconds "$seconds" --output-dir "$output_dir" \
       2>&1 | tee "$session_output"
     ;;
+  experiment)
+    [[ -t 0 ]] || {
+      echo 'experiment requires an interactive TTY' >&2
+      exit 4
+    }
+    "$PYTHON_BIN" -m openframetap pocket3 experiment \
+      --address "$address" --duration "$seconds" --output "$output_dir" \
+      2>&1 | tee "$session_output"
+    ;;
 esac
 session_status=${PIPESTATUS[0]}
 set -e
 
 stop_btmon
+finalize_checksums
 trap - INT TERM EXIT
-printf 'ARTIFACT_DIR=%s\n' "$stem"
+emit_artifact_marker
 exit "$session_status"

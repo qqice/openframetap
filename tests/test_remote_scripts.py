@@ -212,3 +212,50 @@ def test_manual_pair_session_requires_a_real_terminal() -> None:
     assert result.returncode == 4
     assert "requires the device owner at a real terminal" in result.stderr
     assert "Exit status: 37" not in result.stdout
+
+
+def test_pocket_experiment_requires_a_real_terminal() -> None:
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "pocket3-experiment", "1"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert "requires the device owner at a real terminal" in result.stderr
+    assert "Exit status: 37" not in result.stdout
+
+
+def test_experiment_tty_refusal_still_cleans_up_btmon(tmp_path: Path) -> None:
+    start_file = tmp_path / "started"
+    stop_file = tmp_path / "stopped"
+    env = os.environ.copy()
+    env["OPENFRAMETAP_BTMON_BIN"] = shell_path(ROOT / "tests/fixtures/fake-btmon.sh")
+    env["OPENFRAMETAP_BTMON_USE_SUDO"] = "0"
+    env["BTMON_START_FILE"] = shell_path(start_file)
+    env["BTMON_STOP_FILE"] = shell_path(stop_file)
+    result = subprocess.run(
+        [
+            bash_path(),
+            "scripts/capture-pocket3.sh",
+            "experiment",
+            "00:11:22:33:44:55",
+            "1",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert start_file.exists()
+    assert stop_file.read_text(encoding="utf-8") == "stopped"
+    assert "ARTIFACT_DIR=pocket3-experiment-" in result.stdout

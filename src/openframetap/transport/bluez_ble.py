@@ -83,6 +83,8 @@ class BluezBleTransport:
         self._active_disconnect_count = 0
         self._setup_disconnect_count = 0
         self._disconnect_requested = False
+        self._cccd_write_count = 0
+        self._fff5_write_count = 0
 
     @property
     def is_connected(self) -> bool:
@@ -106,6 +108,49 @@ class BluezBleTransport:
     @property
     def setup_disconnect_count(self) -> int:
         return self._setup_disconnect_count
+
+    @property
+    def cccd_write_count(self) -> int:
+        """Count BlueZ notification enable/disable API operations."""
+
+        return self._cccd_write_count
+
+    @property
+    def fff5_write_count(self) -> int:
+        """Count attempted ATT writes to FFF5, including failed attempts."""
+
+        return self._fff5_write_count
+
+    async def acquire_mtu(self) -> int | None:
+        """Ask Bleak's BlueZ backend to expose the negotiated ATT MTU when supported."""
+
+        if not self._client:
+            raise RuntimeError("transport is not connected")
+        backend = getattr(self._client, "_backend", None)
+        acquire = getattr(backend, "_acquire_mtu", None)
+        if callable(acquire):
+            try:
+                await acquire()
+            except Exception as exc:
+                self.event_handler(
+                    {
+                        "wall_timestamp": utc_now(),
+                        "monotonic_ns": time.monotonic_ns(),
+                        "event": "mtu_acquire_warning",
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "fallback_mtu": self.mtu,
+                    }
+                )
+        value = self.mtu
+        self.event_handler(
+            {
+                "wall_timestamp": utc_now(),
+                "monotonic_ns": time.monotonic_ns(),
+                "event": "att_mtu_observed",
+                "att_mtu": value,
+            }
+        )
+        return value
 
     async def connect(self) -> None:
         try:
@@ -192,6 +237,7 @@ class BluezBleTransport:
                 asyncio.get_running_loop().create_task(result)
 
         try:
+            self._cccd_write_count += 1
             await self._client.start_notify(self._notification_characteristic, callback)
             self._subscribed = True
             self.event_handler(
@@ -199,7 +245,9 @@ class BluezBleTransport:
                     "wall_timestamp": utc_now(),
                     "monotonic_ns": time.monotonic_ns(),
                     "event": "fff4_subscribed",
-                    "write_attempted": False,
+                    "cccd_write_attempted": True,
+                    "cccd_write_count": self._cccd_write_count,
+                    "fff5_write_attempted": False,
                 }
             )
         except Exception as exc:
@@ -265,6 +313,7 @@ class BluezBleTransport:
                     "data_hex": chunk.hex(),
                 }
             )
+            self._fff5_write_count += 1
             await self._client.write_gatt_char(
                 self._write_characteristic, chunk, response=False
             )
@@ -295,8 +344,19 @@ class BluezBleTransport:
             return
         try:
             if self._subscribed and self._client.is_connected:
+                self._cccd_write_count += 1
                 await self._client.stop_notify(self._notification_characteristic)
                 self._subscribed = False
+                self.event_handler(
+                    {
+                        "wall_timestamp": utc_now(),
+                        "monotonic_ns": time.monotonic_ns(),
+                        "event": "fff4_unsubscribed",
+                        "cccd_write_attempted": True,
+                        "cccd_write_count": self._cccd_write_count,
+                        "fff5_write_attempted": False,
+                    }
+                )
             if self._client.is_connected:
                 self._disconnect_requested = True
                 await self._client.disconnect()

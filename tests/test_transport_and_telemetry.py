@@ -91,6 +91,8 @@ def test_requested_disconnect_is_not_an_interruption(monkeypatch) -> None:
     assert transport.disconnect_count == 0
     assert transport.active_disconnect_count == 0
     assert transport.setup_disconnect_count == 0
+    assert transport.cccd_write_count == 2
+    assert transport.fff5_write_count == 0
     callback = [event for event in events if event["event"] == "disconnected_callback"]
     assert len(callback) == 1
     assert callback[0]["intentional"] is True

@@ -16,6 +16,7 @@ from openframetap.pairing.pocket3 import (
     write_pairing_stage1_proposal,
 )
 from openframetap.pairing.manual_session import run_manual_pairing_session
+from openframetap.experiments.session import run_passive_experiment
 from openframetap.protocol.commands import PAIRING_COMMANDS
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.reassembly import DumlStreamReassembler
@@ -139,6 +140,18 @@ def build_parser() -> argparse.ArgumentParser:
     telemetry.add_argument("address")
     telemetry.add_argument("--seconds", type=int, default=60)
     telemetry.add_argument("--output-dir", type=Path)
+
+    experiment = pocket3_commands.add_parser(
+        "experiment", help="interactive FFF4-only telemetry experiment with human markers"
+    )
+    experiment.add_argument("--duration", type=int, default=180)
+    experiment.add_argument("--output", type=Path, required=True)
+    experiment.add_argument(
+        "--address",
+        default=os.environ.get(
+            "POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address
+        ),
+    )
     return parser
 
 
@@ -298,5 +311,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         print(json.dumps({"output_dir": str(output_dir), "summary": payload}, indent=2))
+        return 0 if ok else 1
+    if args.command == "pocket3" and args.pocket3_command == "experiment":
+        if args.duration <= 0:
+            raise SystemExit("--duration must be positive")
+        if not sys.stdin.isatty():
+            print(
+                "REFUSED: pocket3 experiment requires an interactive TTY on the ROCK 4D; "
+                "no BLE connection was attempted."
+            )
+            return 4
+        payload, ok = asyncio.run(
+            run_passive_experiment(
+                args.address,
+                duration=args.duration,
+                output_dir=args.output,
+            )
+        )
+        print(json.dumps({"output_dir": str(args.output), "session": payload}, indent=2))
         return 0 if ok else 1
     return 2

@@ -141,6 +141,7 @@ Usage:
   ./scripts/remote.sh pocket3-pair-status
   ./scripts/remote.sh pocket3-pair
   ./scripts/remote.sh pocket3-telemetry [seconds]
+  ./scripts/remote.sh pocket3-experiment [seconds]
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
@@ -252,6 +253,27 @@ bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
     status=$?
     stem="$(extract_stem ARTIFACT_DIR)"
     [[ -n "$stem" ]] || { echo '[openframetap] Missing telemetry artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
+    exit "$status"
+    ;;
+  pocket3-experiment)
+    seconds="${2:-180}"
+    [[ $# -le 2 ]] || { usage >&2; exit 2; }
+    [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'seconds must be a positive integer' >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: experiment requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    git_head="$(git -C "$ROOT_DIR" rev-parse HEAD)" || exit $?
+    print_target
+    printf '%s\n' '[openframetap] Passive experiment: FFF4 CCCD only; FFF5 writes are prohibited.'
+    printf '[openframetap] Duration limit: %s seconds\n' "$seconds"
+    deploy || exit $?
+    run_remote_interactive pocket3-experiment \
+      "cd $REMOTE_DIR && OPENFRAMETAP_GIT_HEAD='$git_head' bash scripts/capture-pocket3.sh experiment '$POCKET3_ADDRESS' '$seconds'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ -n "$stem" ]] || { echo '[openframetap] Missing experiment artifact marker' >&2; exit 3; }
     pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
     exit "$status"
     ;;
