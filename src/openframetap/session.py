@@ -18,6 +18,7 @@ from openframetap.protocol.commands import (
     validate_command_frame,
 )
 from openframetap.protocol.duml import decode_duml_frame
+from openframetap.protocol.reassembly import DumlStreamReassembler
 from openframetap.telemetry.recorder import TelemetryRecorder
 from openframetap.transport.bluez_ble import BluezBleTransport
 
@@ -130,9 +131,54 @@ async def manual_send_pocket3_frame(
         operation="single-user-confirmed-frame-then-listen",
     )
     ready = asyncio.Event()
+    observer = DumlStreamReassembler()
+    pairing_status: str | None = None
+    pocket_confirmation_observed = False
+    protocol_mismatch: str | None = None
 
     async def notification_handler(notification) -> None:
+        nonlocal pairing_status, pocket_confirmation_observed, protocol_mismatch
         await recorder.record_notification(notification)
+        for event in observer.feed(notification.data):
+            frame = event.frame
+            if event.kind != "frame" or frame is None:
+                continue
+            if (frame.cmd_set, frame.cmd_id) == (0x07, 0x45):
+                expected_meta = (
+                    frame.sender == 0x07
+                    and frame.receiver == 0x02
+                    and frame.sequence == decoded.sequence
+                    and frame.flags == 0xC0
+                )
+                if not expected_meta or frame.payload not in {b"\x00\x01", b"\x00\x02"}:
+                    protocol_mismatch = f"unexpected pairing status frame: {frame.raw.hex()}"
+                    print(f"PAIRING_PROTOCOL_MISMATCH: {protocol_mismatch}", flush=True)
+                elif pairing_status is None:
+                    pairing_status = "already_paired" if frame.payload[1] == 1 else "confirmation_required"
+                    print(f"PAIRING_STATUS: {pairing_status}", flush=True)
+                    if pairing_status == "confirmation_required":
+                        print(
+                            "USER_ACTION_REQUIRED: inspect the Pocket screen and confirm pairing there. "
+                            "No follow-up BLE frame will be sent automatically.",
+                            flush=True,
+                        )
+            elif (frame.cmd_set, frame.cmd_id) == (0x07, 0x46):
+                expected_approval = (
+                    frame.sender == 0x07
+                    and frame.receiver == 0x02
+                    and frame.flags == 0x40
+                    and frame.payload == b"\x01"
+                )
+                if not expected_approval:
+                    protocol_mismatch = f"unexpected Pocket approval frame: {frame.raw.hex()}"
+                    print(f"PAIRING_PROTOCOL_MISMATCH: {protocol_mismatch}", flush=True)
+                elif not pocket_confirmation_observed:
+                    pocket_confirmation_observed = True
+                    print(
+                        "POCKET_CONFIRMATION_OBSERVED: approval notification captured; "
+                        "automatic follow-up BLE frames remain disabled.",
+                        flush=True,
+                    )
         ready.set()
 
     transport = transport_factory(
@@ -193,6 +239,9 @@ async def manual_send_pocket3_frame(
                 "command_sent": command_name if frame_written else None,
                 "automatic_follow_up_frames": 0,
                 "bluez_pairing_requested": False,
+                "pairing_status": pairing_status,
+                "pocket_confirmation_observed": pocket_confirmation_observed,
+                "protocol_mismatch": protocol_mismatch,
             },
         )
     return summary, error is None

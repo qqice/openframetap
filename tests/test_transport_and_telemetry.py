@@ -200,6 +200,93 @@ def test_manual_mode_sends_exactly_one_confirmed_frame_and_no_followup(tmp_path)
     assert transmission["follow_up_frames_sent"] == 0
 
 
+def test_manual_mode_reports_confirmation_but_still_sends_no_followup(tmp_path) -> None:
+    sent = []
+    request = build_set_pairing_pin_frame()
+    request_frame = decode_duml_frame(request)
+    ready_frame = encode_duml_frame(
+        sender=1,
+        receiver=2,
+        sequence=1,
+        flags=0,
+        cmd_set=2,
+        cmd_id=0x80,
+        payload=b"ready",
+    )
+    status_frame = encode_duml_frame(
+        sender=7,
+        receiver=2,
+        sequence=request_frame.sequence,
+        flags=0xC0,
+        cmd_set=7,
+        cmd_id=0x45,
+        payload=b"\x00\x02",
+    )
+    approval_frame = encode_duml_frame(
+        sender=7,
+        receiver=2,
+        sequence=0x0400,
+        flags=0x40,
+        cmd_set=7,
+        cmd_id=0x46,
+        payload=b"\x01",
+    )
+
+    class FakeTransport:
+        def __init__(self, _address, _profile, *, event_handler, **_kwargs) -> None:
+            self.event_handler = event_handler
+            self.handler = None
+            self.is_connected = False
+            self.active_disconnect_count = 0
+            self.setup_disconnect_count = 0
+            self.disconnect_count = 0
+
+        async def connect(self) -> None:
+            self.is_connected = True
+
+        async def subscribe(self, handler) -> None:
+            self.handler = handler
+            await self._notify(ready_frame, 1)
+
+        async def _notify(self, raw: bytes, index: int) -> None:
+            await self.handler(
+                NotificationRecord(
+                    wall_timestamp=f"2026-07-18T00:00:0{index}+00:00",
+                    monotonic_ns=index,
+                    characteristic_uuid=POCKET3_PROFILE.notification_uuid,
+                    characteristic_handle=44,
+                    data=raw,
+                )
+            )
+
+        async def send_frame(self, raw, *, command, authorization) -> None:
+            sent.append((bytes(raw), command.name))
+            await self._notify(status_frame, 2)
+            await self._notify(approval_frame, 3)
+
+        async def disconnect(self) -> None:
+            self.is_connected = False
+
+    import hashlib
+
+    summary, ok = asyncio.run(
+        manual_send_pocket3_frame(
+            "fixture",
+            raw=request,
+            command_name="set_pairing_pin",
+            confirmed_sha256=hashlib.sha256(request).hexdigest(),
+            seconds=0.001,
+            output_dir=tmp_path,
+            transport_factory=FakeTransport,
+        )
+    )
+    assert ok
+    assert sent == [(request, "set_pairing_pin")]
+    assert summary["pairing_status"] == "confirmation_required"
+    assert summary["pocket_confirmation_observed"] is True
+    assert summary["automatic_follow_up_frames"] == 0
+
+
 def test_battery_decoder_keeps_raw_payload() -> None:
     payload = bytearray(34)
     payload[20] = 88

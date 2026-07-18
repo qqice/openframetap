@@ -31,7 +31,7 @@ The owning user may execute it from Git Bash on the Windows computer:
 
 The wrapper then asks the user to type the complete SHA-256. Do not pipe, pre-fill, or automate that input. Codex must not run this command.
 
-The command starts btmon, sends only the confirmed frame, listens for 20 seconds, stops btmon through the existing trap, and pulls the evidence directory back under:
+The command starts btmon, sends only the confirmed frame, listens for 20 seconds, stops btmon through the existing trap, and pulls the evidence directory back under. If an exact `00 02` pairing-status response is observed, the terminal prints `USER_ACTION_REQUIRED` and asks the user to inspect and confirm on the Pocket screen. An observed `400746` approval is reported, but still cannot trigger another BLE frame.
 
 ```text
 artifacts/remote/pocket3-manual-frame-YYYYMMDD-HHMMSS/
