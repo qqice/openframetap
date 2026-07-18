@@ -61,6 +61,19 @@ def _redacted_argv(argv: tuple[str, ...]) -> list[str]:
 
 
 def parse_fps_messages(text: str) -> dict:
+    structured = re.findall(r"OPENFRAMETAP_PLAYER_STATS=(\{[^\n]+\})", text)
+    if structured:
+        try:
+            payload = json.loads(structured[-1])
+        except json.JSONDecodeError:
+            pass
+        else:
+            return {
+                "rendered_frames": payload.get("rendered_frames"),
+                "dropped_frames": payload.get("dropped_frames"),
+                "last_reported_fps": payload.get("last_reported_fps"),
+                "maximum_reported_fps": payload.get("maximum_reported_fps"),
+            }
     rendered = [int(value) for value in re.findall(r"rendered:\s*(\d+)", text)]
     dropped = [int(value) for value in re.findall(r"dropped:\s*(\d+)", text)]
     fps = [float(value) for value in re.findall(r"(?:current|fps):\s*([\d.]+)", text)]
@@ -107,8 +120,13 @@ def run_preview(
     screenshot_path = private_dir / "screenshots" / "wayland-preview.png"
     screenshot_attempted = False
     screenshot_error = None
-    runtime_argv = list(spec.argv)
-    runtime_argv.insert(2, "-v")
+    runtime_argv = [
+        sys.executable,
+        "-m",
+        "openframetap.video.gst_player",
+        "--pipeline-json",
+        str(pipeline_path),
+    ]
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             runtime_argv,
@@ -174,6 +192,12 @@ def run_preview(
     )
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
     frame_stats = parse_fps_messages(log_text)
+    fullscreen_events = []
+    for encoded in re.findall(r"OPENFRAMETAP_PLAYER_EVENT=(\{[^\n]+\})", log_text):
+        try:
+            fullscreen_events.append(json.loads(encoded))
+        except json.JSONDecodeError:
+            continue
     errors = [
         line
         for line in log_text.splitlines()
@@ -192,6 +216,14 @@ def run_preview(
         "interrupted": interrupted,
         "decode_errors": len(errors),
         "frames": frame_stats,
+        "fullscreen": {
+            "requested": spec.fullscreen,
+            "applied_after_surface": any(
+                event.get("event") == "fullscreen_applied"
+                and event.get("property_value") is True
+                for event in fullscreen_events
+            ),
+        },
         "metrics": summarize_metrics(samples),
         "startup_timeline": timeline.to_dict(),
         "latency": parse_latency_tracer(log_text),

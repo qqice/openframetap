@@ -21,6 +21,7 @@ class PipelineSpec:
     profile: str
     elements: tuple[str, ...]
     argv: tuple[str, ...]
+    fullscreen: bool = False
     audio_enabled: bool = False
 
     def to_dict(self) -> dict:
@@ -61,7 +62,9 @@ def _sink_tokens(sink: str, *, fullscreen: bool, sync: str) -> tuple[str, ...]:
             f"sync={sync}",
         )
     if sink == "wayland":
-        nested = f"waylandsink fullscreen={'true' if fullscreen else 'false'} sync={sync}"
+        # A Wayland surface does not exist while the launch description is parsed.
+        # gst_player applies the requested fullscreen state after the first frame.
+        nested = f"waylandsink fullscreen=false sync={sync}"
         return (
             "fpsdisplaysink",
             "text-overlay=false",
@@ -122,7 +125,9 @@ def offline_pipeline(
         "!",
         *_sink_tokens(sink, fullscreen=fullscreen, sync=params["sink_sync"]),
     )
-    return PipelineSpec("file", decoder, sink, profile.value, elements, argv)
+    return PipelineSpec(
+        "file", decoder, sink, profile.value, elements, argv, fullscreen=fullscreen
+    )
 
 
 def live_pipeline(
@@ -193,4 +198,6 @@ def live_pipeline(
         "!",
         *_sink_tokens(sink, fullscreen=fullscreen, sync=params["sink_sync"]),
     )
-    return PipelineSpec(source, decoder, sink, profile.value, elements, argv)
+    return PipelineSpec(
+        source, decoder, sink, profile.value, elements, argv, fullscreen=fullscreen
+    )

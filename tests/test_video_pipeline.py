@@ -10,6 +10,7 @@ from openframetap.display.session import parse_loginctl_session
 from openframetap.video.decoder_probe import parse_gst_inspect
 from openframetap.video.metrics import read_temperature_c, summarize_metrics, MetricSample
 from openframetap.video.live_preview import parse_fps_messages
+from openframetap.video.gst_player import should_apply_fullscreen
 from openframetap.video.latency import parse_latency_tracer
 from openframetap.video.pipelines import (
     PipelineProfile,
@@ -85,7 +86,8 @@ def test_live_rtmp_and_rtsp_sources_are_structured_and_hls_is_forbidden() -> Non
     assert rtmp.audio_enabled is False
     assert rtsp.elements[:2] == ("rtspsrc", "rtph264depay")
     assert "leaky=downstream" in rtmp.argv
-    assert any("waylandsink fullscreen=true" in item for item in rtmp.argv)
+    assert any("waylandsink fullscreen=false" in item for item in rtmp.argv)
+    assert rtmp.fullscreen is True
     with pytest.raises(ValueError, match="HLS"):
         live_pipeline("http://invalid", source="hls", decoder="mppvideodec")
 
@@ -138,6 +140,30 @@ last-message = rendered: 56, dropped: 5, current: 30.00, average: 27.77
     assert payload["rendered_frames"] == 56
     assert payload["dropped_frames"] == 5
     assert payload["last_reported_fps"] == 30.0
+
+
+def test_structured_player_stats_override_debug_log_messages() -> None:
+    text = (
+        "last-message = rendered: 12, dropped: 1, current: 20.0\n"
+        'OPENFRAMETAP_PLAYER_STATS={"rendered_frames": 42, "dropped_frames": 3, '
+        '"last_reported_fps": 29.9, "maximum_reported_fps": null}\n'
+    )
+    assert parse_fps_messages(text)["rendered_frames"] == 42
+
+
+def test_wayland_fullscreen_is_only_applied_after_first_frame() -> None:
+    assert not should_apply_fullscreen(
+        requested=True, already_applied=False, frames_rendered=0
+    )
+    assert should_apply_fullscreen(
+        requested=True, already_applied=False, frames_rendered=1
+    )
+    assert not should_apply_fullscreen(
+        requested=True, already_applied=True, frames_rendered=2
+    )
+    assert not should_apply_fullscreen(
+        requested=False, already_applied=False, frames_rendered=2
+    )
 
 
 def test_expected_flv_eos_warning_is_not_a_decode_error() -> None:
