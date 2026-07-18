@@ -70,9 +70,9 @@ LIVESTREAM_COMMANDS = {
         reference_sources=(
             "node-osmo DjiStartStreamingMessagePayload",
             "Moblin DjiStartStreamingMessagePayload",
-            "djictl GetMessagePayloadConfigureLiveStream",
+            "djictl GetMessagePayloadConfigureLiveStream (fixed-byte conflict)",
         ),
-        confidence="high-reference-not-local-hardware",
+        confidence="medium-reference-flow-conflict",
     ),
     "start_live_stream_transport": CommandDefinition(
         name="start_live_stream_transport",
@@ -161,4 +161,42 @@ def build_prepare_stream_stage2_frame(*, sequence: int = 0xFFAB) -> bytes:
         cmd_set=command.cmd_set,
         cmd_id=command.cmd_id,
         payload=bytes.fromhex("00011c00"),
+    )
+
+
+def build_configure_live_stream_frame(
+    *,
+    rtmp_url: str,
+    sequence: int = 0x8C2C,
+    resolution: int = 720,
+    fps: int = 30,
+    bitrate_kbps: int = 4000,
+) -> bytes:
+    """Build the node-osmo/Moblin Pocket 3 08/78 configuration request."""
+
+    resolution_byte = {480: 0x47, 720: 0x04, 1080: 0x0A}.get(resolution)
+    fps_byte = {25: 0x02, 30: 0x03}.get(fps)
+    if resolution_byte is None or fps_byte is None:
+        raise ValueError("unsupported Pocket 3 livestream resolution or frame rate")
+    if not 500 <= bitrate_kbps <= 20_000:
+        raise ValueError("livestream bitrate must be 500..20000 Kbps")
+    encoded_url = rtmp_url.encode("utf-8")
+    if not encoded_url or len(encoded_url) > 0xFFFF:
+        raise ValueError("RTMP URL encoded length must be 1..65535 bytes")
+    payload = (
+        bytes((0x00, 0x2E, 0x00, resolution_byte))
+        + bitrate_kbps.to_bytes(2, "little")
+        + bytes((0x02, 0x00, fps_byte, 0x00, 0x00, 0x00))
+        + len(encoded_url).to_bytes(2, "little")
+        + encoded_url
+    )
+    command = LIVESTREAM_COMMANDS["configure_live_stream"]
+    return encode_duml_frame(
+        sender=command.sender,
+        receiver=command.receiver,
+        sequence=sequence,
+        flags=0x40,
+        cmd_set=command.cmd_set,
+        cmd_id=command.cmd_id,
+        payload=payload,
     )

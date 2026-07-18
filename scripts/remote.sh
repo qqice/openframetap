@@ -175,6 +175,7 @@ Usage:
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
   ./scripts/remote.sh pocket3-rtmp-configure-stream-key
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
+  ./scripts/remote.sh pocket3-rtmp-propose-stream
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
@@ -634,6 +635,31 @@ chmod 600 artifacts/private/proposal-input/workflow.json artifacts/private/propo
     pull_dir "artifacts/sanitized/proposals/$stem" "$ROOT_DIR/artifacts/sanitized/proposals" || exit $?
     pull_file artifacts/private/proposal-input/workflow.json "$ROOT_DIR/artifacts/private" || exit $?
     mv "$ROOT_DIR/artifacts/private/workflow.json" "$RTMP_WORKFLOW_STATE"
+    printf '[openframetap] PRIVATE_PROPOSAL_DIR=%s\n' "$ROOT_DIR/artifacts/private/proposals/$stem"
+    printf '[openframetap] SANITIZED_PROPOSAL_DIR=%s\n' "$ROOT_DIR/artifacts/sanitized/proposals/$stem"
+    ;;
+  pocket3-rtmp-propose-stream)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    deploy || exit $?
+    run_remote rtmp-stream-proposal "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap pocket3 rtmp propose stream \\
+  --address '$POCKET3_ADDRESS' \\
+  --secret-file "\$HOME/.config/openframetap/secrets.env" \\
+  --wifi-result artifacts/private/pocket3-rtmp-prepare-wifi-recovery-20260719-025302/summary.json \\
+  --private-root artifacts/private/proposals \\
+  --sanitized-root artifacts/sanitized/proposals \\
+  --state-file artifacts/private/pocket3-rtmp-workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    stem="$(extract_stem PROPOSAL_STEM | tr -d '\r')"
+    [[ "$stem" == stream-* ]] || {
+      echo '[openframetap] Refused: missing stream proposal marker.' >&2
+      exit 3
+    }
+    pull_dir "artifacts/private/proposals/$stem" "$ROOT_DIR/artifacts/private/proposals" || exit $?
+    pull_dir "artifacts/sanitized/proposals/$stem" "$ROOT_DIR/artifacts/sanitized/proposals" || exit $?
+    pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || exit $?
     printf '[openframetap] PRIVATE_PROPOSAL_DIR=%s\n' "$ROOT_DIR/artifacts/private/proposals/$stem"
     printf '[openframetap] SANITIZED_PROPOSAL_DIR=%s\n' "$ROOT_DIR/artifacts/sanitized/proposals/$stem"
     ;;

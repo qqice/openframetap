@@ -13,6 +13,7 @@ from openframetap.protocol.commands import validate_command_frame
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.livestream_commands import (
     LIVESTREAM_COMMANDS,
+    build_configure_live_stream_frame,
     build_prepare_to_live_stream_frame,
     build_prepare_stream_stage2_frame,
     build_wifi_connect_frame,
@@ -325,6 +326,174 @@ def write_wifi_proposal(
         "private_proposal": str(private_json),
         "sanitized_proposal": str(sanitized_json),
     }
+
+
+def write_stream_proposal(
+    *,
+    address: str,
+    rtmp_url: str,
+    private_root: Path,
+    sanitized_root: Path,
+    wifi_result_sha256: str,
+    server_status_sha256: str,
+    sequence: int = 0x8C2C,
+) -> dict:
+    """Write one private 08/78 proposal without exposing its RTMP key."""
+
+    from urllib.parse import urlsplit
+
+    command = LIVESTREAM_COMMANDS["configure_live_stream"]
+    frame = build_configure_live_stream_frame(rtmp_url=rtmp_url, sequence=sequence)
+    decoded = decode_duml_frame(frame)
+    validate_command_frame(command, decoded)
+    if not (decoded.crc8_valid and decoded.crc16_valid) or decoded.raw != frame:
+        raise RuntimeError("offline stream proposal round-trip validation failed")
+    for name, digest in (
+        ("wifi result", wifi_result_sha256),
+        ("server status", server_status_sha256),
+    ):
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest.lower()
+        ):
+            raise ValueError(f"{name} SHA-256 is invalid")
+    parsed = urlsplit(rtmp_url)
+    stream_key = parsed.path.rsplit("/", 1)[-1]
+    digest = hashlib.sha256(frame).hexdigest()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    private_dir = require_private_directory(private_root / f"stream-{stamp}")
+    sanitized_dir = (sanitized_root / f"stream-{stamp}").resolve()
+    if "sanitized" not in {part.lower() for part in sanitized_dir.parts}:
+        raise ValueError("sanitized stream proposal must be under artifacts/sanitized")
+    sanitized_dir.mkdir(parents=True, exist_ok=True)
+    evidence = {
+        "wifi_result_sha256": wifi_result_sha256.lower(),
+        "server_status_sha256": server_status_sha256.lower(),
+    }
+    private_payload = {
+        "schema_version": 1,
+        "stage": "stream",
+        "command": command.name,
+        "target_address": address,
+        "frame_hex": frame.hex(),
+        "frame_sha256": digest,
+        "max_send_count": 1,
+        "automatic_retry": False,
+        "automatic_follow_up": False,
+        "contains_sensitive_data": True,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "evidence": evidence,
+        "stream_key_sha256": hashlib.sha256(stream_key.encode()).hexdigest(),
+        "decoded": decoded.to_dict(),
+    }
+    private_json = private_dir / "proposal-private.json"
+    private_bin = private_dir / "proposal.bin"
+    _write_private(
+        private_json,
+        (json.dumps(private_payload, indent=2, ensure_ascii=False) + "\n").encode(),
+    )
+    _write_private(private_bin, frame)
+    sanitized = {
+        "schema_version": 1,
+        "stage": "stream",
+        "command": command.name,
+        "target_address_masked": _mask_address(address),
+        "target_address_sha256": hashlib.sha256(address.upper().encode()).hexdigest(),
+        "source_component": "0x02",
+        "target_component": "0x08",
+        "sequence": f"0x{sequence:04X}",
+        "flags": "0x40",
+        "cmd_set": "0x08",
+        "cmd_id": "0x78",
+        "resolution": 720,
+        "fps": 30,
+        "bitrate_kbps": 4000,
+        "pocket3_fixed_byte": "0x2E",
+        "rtmp_target": f"rtmp://{parsed.hostname}:{parsed.port}/live/<redacted>",
+        "stream_key_length": len(stream_key.encode("utf-8")),
+        "stream_key_sha256": hashlib.sha256(stream_key.encode()).hexdigest(),
+        "frame_sha256": digest,
+        "total_length": decoded.total_length,
+        "payload_length": len(decoded.payload),
+        "crc8_valid": decoded.crc8_valid,
+        "crc16_valid": decoded.crc16_valid,
+        "round_trip_valid": decoded.raw == frame,
+        "reference_sources": list(command.reference_sources),
+        "confidence": command.confidence,
+        "locally_sent": False,
+        "contains_sensitive_data": False,
+        "max_send_count": 1,
+        "automatic_retry": False,
+        "automatic_follow_up": False,
+        "evidence": evidence,
+        "expected_response": "same-sequence C0/08/78 or first RTMP TCP connection",
+        "risk": "may start Pocket 3 RTMP publishing to the fixed LAN endpoint",
+    }
+    sanitized_json = sanitized_dir / "proposal.json"
+    sanitized_json.write_text(
+        json.dumps(sanitized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (sanitized_dir / "proposal.sha256").write_text(
+        f"{digest}  private-proposal-frame\n", encoding="ascii"
+    )
+    return {
+        **sanitized,
+        "private_proposal": str(private_json),
+        "sanitized_proposal": str(sanitized_json),
+    }
+
+
+def load_fixed_stream_proposal(path: Path, *, expected_address: str) -> tuple[dict, bytes]:
+    """Validate one private 08/78 proposal without rendering its URL."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    required = {
+        "schema_version",
+        "stage",
+        "command",
+        "target_address",
+        "frame_hex",
+        "frame_sha256",
+        "evidence",
+        "stream_key_sha256",
+    }
+    if not required.issubset(payload):
+        raise PermissionError("stream proposal schema is incomplete")
+    if (
+        payload.get("stage") != "stream"
+        or payload.get("command") != "configure_live_stream"
+        or payload.get("max_send_count") != 1
+        or payload.get("automatic_retry") is not False
+        or payload.get("automatic_follow_up") is not False
+        or payload.get("contains_sensitive_data") is not True
+    ):
+        raise PermissionError("stream proposal single-send policy is invalid")
+    if payload["target_address"].upper() != expected_address.upper():
+        raise PermissionError("stream proposal Pocket address mismatch")
+    raw = bytes.fromhex(payload["frame_hex"])
+    if hashlib.sha256(raw).hexdigest() != payload["frame_sha256"].lower():
+        raise PermissionError("stream proposal frame SHA-256 mismatch")
+    for name in ("wifi_result_sha256", "server_status_sha256"):
+        value = (payload.get("evidence") or {}).get(name, "").lower()
+        if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+            raise PermissionError(f"stream proposal {name} is invalid")
+    decoded = decode_duml_frame(raw)
+    command = LIVESTREAM_COMMANDS["configure_live_stream"]
+    validate_command_frame(command, decoded)
+    if (
+        (decoded.sender, decoded.receiver, decoded.sequence, decoded.flags)
+        != (0x02, 0x08, 0x8C2C, 0x40)
+        or (decoded.cmd_set, decoded.cmd_id) != (0x08, 0x78)
+        or not decoded.crc8_valid
+        or not decoded.crc16_valid
+        or decoded.raw != raw
+    ):
+        raise PermissionError("stream proposal wire fields are invalid")
+    url_length = int.from_bytes(decoded.payload[12:14], "little")
+    url = decoded.payload[14 : 14 + url_length].decode("utf-8")
+    stream_key = url.rsplit("/", 1)[-1]
+    if hashlib.sha256(stream_key.encode()).hexdigest() != payload["stream_key_sha256"]:
+        raise PermissionError("stream proposal key fingerprint mismatch")
+    return payload, raw
 
 
 def write_prepare_recovery_proposal(

@@ -9,9 +9,11 @@ import pytest
 
 from openframetap.devices.pocket3_livestream import (
     load_fixed_proposal,
+    load_fixed_stream_proposal,
     load_fixed_wifi_proposal,
     write_prepare_recovery_proposal,
     write_prepare_proposal,
+    write_stream_proposal,
     write_wifi_proposal,
 )
 from openframetap.network.secrets import WifiProvisioningSecrets
@@ -26,6 +28,7 @@ from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.livestream_commands import (
     build_prepare_to_live_stream_frame,
     build_prepare_stream_stage2_frame,
+    build_configure_live_stream_frame,
     build_wifi_connect_frame,
 )
 from openframetap.workflows.pocket3_rtmp import Pocket3RtmpWorkflow
@@ -81,6 +84,56 @@ def test_prepare_stage2_matches_public_pocket3_mimo_capture_and_stays_denied() -
                 command.name, purpose="fixture", approval_reference="fixture"
             ),
         )
+
+
+def test_stream_configuration_frame_is_fixed_720p30_and_round_trips() -> None:
+    url = "rtmp://192.168.1.229:1935/live/fixture-key"
+    raw = build_configure_live_stream_frame(rtmp_url=url)
+    decoded = decode_duml_frame(raw)
+    assert (decoded.sender, decoded.receiver, decoded.sequence) == (2, 8, 0x8C2C)
+    assert (decoded.flags, decoded.cmd_set, decoded.cmd_id) == (0x40, 0x08, 0x78)
+    assert decoded.payload[:12] == bytes.fromhex("002e0004a00f020003000000")
+    url_length = int.from_bytes(decoded.payload[12:14], "little")
+    assert url_length == len(url.encode())
+    assert decoded.payload[14:].decode() == url
+    assert decoded.crc8_valid and decoded.crc16_valid
+    validate_command_frame(get_command_definition("configure_live_stream"), decoded)
+
+
+def test_stream_configuration_rejects_non_lan_url() -> None:
+    raw = build_configure_live_stream_frame(
+        rtmp_url="rtmp://100.125.223.67:1935/live/fixture-key"
+    )
+    with pytest.raises(CommandRejected, match="LAN policy"):
+        validate_command_frame(
+            get_command_definition("configure_live_stream"), decode_duml_frame(raw)
+        )
+
+
+def test_stream_proposal_is_private_and_sanitized(tmp_path: Path) -> None:
+    stream_key = "fixture-secret-key"
+    url = f"rtmp://192.168.1.229:1935/live/{stream_key}"
+    payload = write_stream_proposal(
+        address=ADDRESS,
+        rtmp_url=url,
+        private_root=tmp_path / "artifacts" / "private" / "proposals",
+        sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
+        wifi_result_sha256="5" * 64,
+        server_status_sha256="6" * 64,
+    )
+    private_path = Path(payload["private_proposal"])
+    private, raw = load_fixed_stream_proposal(private_path, expected_address=ADDRESS)
+    sanitized = Path(payload["sanitized_proposal"]).read_text(encoding="utf-8")
+    assert stream_key.encode() in raw
+    assert stream_key not in sanitized
+    assert url not in sanitized
+    assert private["frame_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert payload["sequence"] == "0x8C2C"
+    assert payload["resolution"] == 720
+    assert payload["fps"] == 30
+    assert payload["bitrate_kbps"] == 4000
+    with pytest.raises(PermissionError, match="address"):
+        load_fixed_stream_proposal(private_path, expected_address="AA:BB:CC:DD:EE:FF")
 
 
 def test_prepare_proposal_sha_address_and_sanitization(tmp_path: Path) -> None:

@@ -263,3 +263,51 @@ def validate_command_frame(command: CommandDefinition, frame) -> None:
         psk_length = payload[psk_length_offset]
         if psk_length_offset + 1 + psk_length != len(payload) or not 8 <= psk_length <= 63:
             raise CommandRejected("wifi_connect PSK packing or length is invalid")
+    elif command.name == "configure_live_stream":
+        payload = frame.payload
+        if len(payload) < 15:
+            raise CommandRejected("configure_live_stream payload is truncated")
+        if payload[:4] not in {
+            bytes((0x00, 0x2E, 0x00, 0x47)),
+            bytes((0x00, 0x2E, 0x00, 0x04)),
+            bytes((0x00, 0x2E, 0x00, 0x0A)),
+        }:
+            raise CommandRejected("configure_live_stream fixed bytes or resolution are invalid")
+        bitrate_kbps = int.from_bytes(payload[4:6], "little")
+        if not 500 <= bitrate_kbps <= 20_000 or payload[6:8] != b"\x02\x00":
+            raise CommandRejected("configure_live_stream bitrate or fixed bytes are invalid")
+        if payload[8] not in {0x02, 0x03} or payload[9:12] != b"\x00\x00\x00":
+            raise CommandRejected("configure_live_stream FPS or reserved bytes are invalid")
+        url_length = int.from_bytes(payload[12:14], "little")
+        url_bytes = payload[14:]
+        if url_length != len(url_bytes):
+            raise CommandRejected("configure_live_stream RTMP URL packing is invalid")
+        try:
+            rtmp_url = url_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CommandRejected("configure_live_stream RTMP URL is not UTF-8") from exc
+        from urllib.parse import urlsplit
+        from openframetap.network.interfaces import is_rfc1918
+
+        parsed = urlsplit(rtmp_url)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise CommandRejected("configure_live_stream RTMP port is invalid") from exc
+        try:
+            lan_target = bool(parsed.hostname and is_rfc1918(parsed.hostname))
+        except ValueError:
+            lan_target = False
+        if (
+            parsed.scheme != "rtmp"
+            or not lan_target
+            or port != 1935
+            or not parsed.path.startswith("/live/")
+            or len(parsed.path.split("/")) != 3
+            or not parsed.path.rsplit("/", 1)[-1]
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise CommandRejected("configure_live_stream RTMP URL violates LAN policy")

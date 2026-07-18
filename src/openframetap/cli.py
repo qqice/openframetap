@@ -194,7 +194,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
     )
     rtmp_propose = rtmp_commands.add_parser("propose", help="generate one offline proposal")
-    rtmp_propose.add_argument("stage", choices=("prepare", "wifi", "prepare-recovery"))
+    rtmp_propose.add_argument(
+        "stage", choices=("prepare", "wifi", "prepare-recovery", "stream")
+    )
     rtmp_propose.add_argument(
         "--address",
         default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
@@ -612,10 +614,12 @@ def main(argv: list[str] | None = None) -> int:
             load_fixed_wifi_proposal,
             write_prepare_recovery_proposal,
             write_prepare_proposal,
+            write_stream_proposal,
             write_wifi_proposal,
         )
         from openframetap.network.secrets import (
             load_wifi_provisioning_secrets,
+            load_livestream_secrets,
             require_private_directory,
         )
         from openframetap.workflows.pocket3_rtmp import (
@@ -808,7 +812,7 @@ def main(argv: list[str] | None = None) -> int:
                     },
                 )
                 workflow.save(args.state_file)
-            else:
+            elif args.stage == "prepare-recovery":
                 if workflow.phase != "wifi_connected_or_unknown":
                     print(
                         "REFUSED: prepare recovery requires wifi_connected_or_unknown "
@@ -835,6 +839,69 @@ def main(argv: list[str] | None = None) -> int:
                     sanitized_root=args.sanitized_root,
                     wifi_result_sha256=wifi_result_sha,
                 )
+            else:
+                if workflow.phase != "wifi_connected_or_unknown":
+                    print(
+                        "REFUSED: stream proposal requires wifi_connected_or_unknown "
+                        f"state, found {workflow.phase}"
+                    )
+                    return 4
+                if args.secret_file is None or args.wifi_result is None:
+                    raise SystemExit("stream requires --secret-file and --wifi-result")
+                wifi_result = json.loads(args.wifi_result.read_text(encoding="utf-8"))
+                wifi_response = wifi_result.get("wifi_response") or {}
+                if (
+                    wifi_result.get("recovery_result") != "wifi_retry_response_observed"
+                    or wifi_result.get("writes_attempted") != 3
+                    or wifi_result.get("wifi_frames_sent") != 1
+                    or wifi_result.get("rtmp_configuration_frames_sent") != 0
+                    or wifi_response.get("cmd_set") != "0x07"
+                    or wifi_response.get("cmd_id") != "0x47"
+                    or wifi_response.get("payload_hex") not in {"0000", "000000"}
+                    or wifi_response.get("crc8", {}).get("valid") is not True
+                    or wifi_response.get("crc16", {}).get("valid") is not True
+                ):
+                    raise SystemExit(
+                        "--wifi-result does not contain the validated prepared Wi-Fi ACK"
+                    )
+                import hashlib
+
+                from openframetap.network.interfaces import audit_wlan0, build_rtmp_url
+                from openframetap.video.rtmp_server import make_server
+
+                wifi_result_sha = hashlib.sha256(args.wifi_result.read_bytes()).hexdigest()
+                secrets = load_livestream_secrets(
+                    secret_file=args.secret_file, environ={}
+                )
+                snapshot = audit_wlan0()
+                status = make_server().status().to_dict()
+                if (
+                    status.get("state") != "running"
+                    or status.get("listener_reachable") is not True
+                    or status.get("listener_address") != f"{snapshot.ipv4}:1935"
+                ):
+                    raise SystemExit("MediaMTX is not healthy on the current wlan0 IPv4")
+                server_status_sha = hashlib.sha256(
+                    json.dumps(status, sort_keys=True).encode("utf-8")
+                ).hexdigest()
+                payload = write_stream_proposal(
+                    address=args.address,
+                    rtmp_url=build_rtmp_url(snapshot.ipv4, secrets.stream_key),
+                    private_root=args.private_root,
+                    sanitized_root=args.sanitized_root,
+                    wifi_result_sha256=wifi_result_sha,
+                    server_status_sha256=server_status_sha,
+                )
+                workflow.transition(
+                    "stream_proposed",
+                    evidence={
+                        "proposal_sha256": payload["frame_sha256"],
+                        "wifi_result_sha256": wifi_result_sha,
+                        "server_status_sha256": server_status_sha,
+                        "locally_sent": False,
+                    },
+                )
+                workflow.save(args.state_file)
             if args.stage == "prepare":
                 workflow.save(args.state_file)
             safe = {key: value for key, value in payload.items() if key != "private_proposal"}
