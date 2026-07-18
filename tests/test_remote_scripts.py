@@ -259,3 +259,21 @@ def test_experiment_tty_refusal_still_cleans_up_btmon(tmp_path: Path) -> None:
     assert start_file.exists()
     assert stop_file.read_text(encoding="utf-8") == "stopped"
     assert "ARTIFACT_DIR=pocket3-experiment-" in result.stdout
+
+
+def test_analyze_wrapper_rejects_unsafe_directory_before_ssh() -> None:
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "analyze-telemetry", "../not-an-experiment"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 2
+    assert "must be pocket3-experiment" in result.stderr
+    assert "Exit status: 37" not in result.stdout

@@ -101,6 +101,18 @@ def build_parser() -> argparse.ArgumentParser:
     decode_source.add_argument("--hex", dest="hex_data")
     decode_source.add_argument("--file", type=Path)
 
+    analyze = subcommands.add_parser("analyze", help="offline immutable-evidence analysis")
+    analyze_commands = analyze.add_subparsers(dest="analyze_command", required=True)
+    analyze_telemetry = analyze_commands.add_parser(
+        "telemetry", help="analyze one passive Pocket 3 experiment directory"
+    )
+    analyze_telemetry.add_argument("experiment_directory", type=Path)
+    analyze_telemetry.add_argument("--windows-ms", default="50,100,250")
+    analyze_telemetry.add_argument("--battery-window-ms", type=float, default=1000.0)
+    analyze_telemetry.add_argument(
+        "--analysis-location", default=os.environ.get("OPENFRAMETAP_ANALYSIS_LOCATION", "local")
+    )
+
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
     pair = pocket3_commands.add_parser("pair", help="DJI application-layer pairing")
@@ -229,6 +241,30 @@ def main(argv: list[str] | None = None) -> int:
                 errors = [{"reason": str(exc), "raw_hex": raw.hex()}]
         print(json.dumps({"frames": frames, "errors": errors}, indent=2, ensure_ascii=False))
         return 0 if frames and not errors else 1
+    if args.command == "analyze" and args.analyze_command == "telemetry":
+        from openframetap.analysis.report import analyze_experiment
+
+        try:
+            windows_ms = tuple(float(item) for item in args.windows_ms.split(","))
+        except ValueError as exc:
+            raise SystemExit("--windows-ms must be a comma-separated numeric list") from exc
+        if not windows_ms or any(value < 0 for value in windows_ms):
+            raise SystemExit("--windows-ms values must be non-negative")
+        if args.battery_window_ms < 0:
+            raise SystemExit("--battery-window-ms must be non-negative")
+        try:
+            payload = analyze_experiment(
+                args.experiment_directory,
+                windows_ms=windows_ms,
+                battery_window_ms=args.battery_window_ms,
+                analysis_git_head=os.environ.get("OPENFRAMETAP_GIT_HEAD", "unknown"),
+                analysis_location=args.analysis_location,
+            )
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            print(f"ANALYSIS_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
     if args.command == "pocket3" and args.pocket3_command == "pair":
         if args.pair_command == "status":
             output_dir = args.output_dir or Path("artifacts") / f"pocket3-pair-status-{_stamp()}"

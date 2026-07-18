@@ -142,6 +142,7 @@ Usage:
   ./scripts/remote.sh pocket3-pair
   ./scripts/remote.sh pocket3-telemetry [seconds]
   ./scripts/remote.sh pocket3-experiment [seconds]
+  ./scripts/remote.sh analyze-telemetry <pocket3-experiment-directory>
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
@@ -274,6 +275,23 @@ bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
     status=$?
     stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
     [[ -n "$stem" ]] || { echo '[openframetap] Missing experiment artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
+    exit "$status"
+    ;;
+  analyze-telemetry)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    stem="$(basename -- "$2")"
+    [[ "$stem" =~ ^pocket3-experiment-[0-9]{8}-[0-9]{6}$ ]] || {
+      echo 'experiment directory must be pocket3-experiment-YYYYMMDD-HHMMSS' >&2
+      exit 2
+    }
+    git_head="$(git -C "$ROOT_DIR" rev-parse HEAD)" || exit $?
+    deploy || exit $?
+    run_remote analyze-telemetry "set -eu
+cd $REMOTE_DIR
+OPENFRAMETAP_GIT_HEAD='$git_head' .venv/bin/python -m openframetap analyze telemetry \
+  'artifacts/$stem' --analysis-location rock4d"
+    status=$?
     pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
     exit "$status"
     ;;
