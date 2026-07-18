@@ -113,6 +113,29 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_telemetry.add_argument(
         "--analysis-location", default=os.environ.get("OPENFRAMETAP_ANALYSIS_LOCATION", "local")
     )
+    glass_latency = analyze_commands.add_parser(
+        "glass-latency", help="decode a simultaneous SOURCE/DSI phone recording"
+    )
+    glass_latency.add_argument("phone_video", type=Path)
+    glass_latency.add_argument("--pattern-log", type=Path, required=True)
+    glass_latency.add_argument("--source-roi")
+    glass_latency.add_argument("--dsi-roi")
+    glass_latency.add_argument("--interactive-roi", action="store_true")
+    glass_latency.add_argument("--phone-fps", default="auto")
+    glass_latency.add_argument("--threshold", default="auto")
+    glass_latency.add_argument("--output", type=Path)
+    glass_latency.add_argument("--source-transform")
+    glass_latency.add_argument("--dsi-transform")
+    glass_latency.add_argument("--max-latency-ms", type=float, default=2000.0)
+    glass_latency.add_argument("--bits", type=int, default=16)
+    glass_latency.add_argument("--invert", action="store_true")
+    glass_latency.add_argument(
+        "--pipeline-profile",
+        choices=("stable", "low-latency", "aggressive-low-latency"),
+        default="low-latency",
+    )
+    glass_latency.add_argument("--phone-model")
+    glass_latency.add_argument("--ambient-notes")
 
     video = subcommands.add_parser("video", help="user-space RTMP ingest tools")
     video_commands = video.add_subparsers(dest="video_command", required=True)
@@ -202,7 +225,16 @@ def build_parser() -> argparse.ArgumentParser:
         "latency-pattern", help="show a high-contrast counter for glass-to-glass recording"
     )
     latency_pattern.add_argument("--duration", type=int, default=60)
-    latency_pattern.add_argument("--windowed", action="store_true")
+    latency_pattern.add_argument("--display", type=int, default=0)
+    pattern_mode = latency_pattern.add_mutually_exclusive_group()
+    pattern_mode.add_argument("--fullscreen", action="store_true", default=True)
+    pattern_mode.add_argument("--windowed", action="store_true")
+    latency_pattern.add_argument("--refresh-hz", default="auto")
+    latency_pattern.add_argument("--bits", type=int, default=16)
+    latency_pattern.add_argument("--gray-code", action="store_true", default=True)
+    latency_pattern.add_argument("--log", type=Path)
+    latency_pattern.add_argument("--warmup", type=float, default=5.0)
+    latency_pattern.add_argument("--invert", action="store_true")
 
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
@@ -413,9 +445,22 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         from openframetap.tools.latency_pattern import run_latency_pattern
 
-        run_latency_pattern(
-            fullscreen=not args.windowed, duration_seconds=args.duration
-        )
+        try:
+            refresh_hz = None if args.refresh_hz == "auto" else float(args.refresh_hz)
+            output = run_latency_pattern(
+                fullscreen=not args.windowed,
+                duration_seconds=args.duration,
+                display_index=args.display,
+                refresh_hz=refresh_hz,
+                bits=args.bits,
+                invert=args.invert,
+                warmup_seconds=args.warmup,
+                log_path=args.log,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"LATENCY_PATTERN_FAILED: {exc}")
+            return 2
+        print(f"LATENCY_PATTERN_OUTPUT={output}")
         return 0
     if args.command == "video" and args.video_command == "doctor":
         from openframetap.video.decoder_probe import run_video_doctor
@@ -750,6 +795,39 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"ANALYSIS_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "analyze" and args.analyze_command == "glass-latency":
+        from openframetap.analysis.glass_latency.models import ROI, parse_transform
+        from openframetap.analysis.glass_latency.session import analyze_glass_latency
+
+        if args.threshold != "auto":
+            print("GLASS_LATENCY_FAILED: only reference-cell auto threshold is supported")
+            return 2
+        try:
+            source_roi = ROI.parse(args.source_roi) if args.source_roi else None
+            dsi_roi = ROI.parse(args.dsi_roi) if args.dsi_roi else None
+            phone_fps = None if args.phone_fps == "auto" else float(args.phone_fps)
+            payload = analyze_glass_latency(
+                args.phone_video,
+                pattern_log=args.pattern_log,
+                source_roi=source_roi,
+                dsi_roi=dsi_roi,
+                interactive_roi=args.interactive_roi,
+                phone_fps=phone_fps,
+                output=args.output,
+                source_transform=parse_transform(args.source_transform),
+                dsi_transform=parse_transform(args.dsi_transform),
+                maximum_latency_ms=args.max_latency_ms,
+                bits=args.bits,
+                invert=args.invert,
+                pipeline_profile=args.pipeline_profile,
+                phone_model=args.phone_model,
+                ambient_notes=args.ambient_notes,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"GLASS_LATENCY_FAILED: {exc}")
             return 1
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
