@@ -54,14 +54,15 @@ This matrix separates public-source conclusions from OpenFrameTap capture eviden
 
 ```text
 IDLE --FFF4 subscribed--> SUBSCRIBED
-SUBSCRIBED --explicit authorization--> WAITING_STATUS
+SUBSCRIBED --human executes one confirmed candidate--> WAITING_STATUS
 WAITING_STATUS --00 01--> PAIRED (already paired)
 WAITING_STATUS --00 02--> WAITING_DEVICE_CONFIRMATION
-WAITING_DEVICE_CONFIRMATION --400746 payload 01--> WAITING_STAGE1_RESPONSE
-WAITING_STAGE1_RESPONSE --expected response--> WAITING_STAGE2_RESPONSE
-WAITING_STAGE2_RESPONSE --expected success--> PAIRED
+WAITING_DEVICE_CONFIRMATION --400746 payload 01--> PROPOSE_STAGE1
+PROPOSE_STAGE1 --separate human-confirmed frame + evidence--> PROPOSE_STAGE2
+PROPOSE_STAGE2 --separate human-confirmed frame + evidence--> PAIRED
 
 Any unexpected payload, timeout, disconnect, or user cancellation --> stop/fail
+No transition automatically invokes a BLE write
 An explicitly initiated retry is possible only while attempts < 2
 ```
 
@@ -69,4 +70,4 @@ BlueZ bonding is not a node in this state graph. It is a separate system-layer m
 
 ## Safety decision
 
-The current send allowlist contains only `set_pairing_pin`, `pairing_stage1_ack`, and `pairing_stage2`, and even those require an explicit `SendAuthorization`. The transport decodes a frame, validates both CRCs, verifies sender/receiver and command IDs against the definition, and then applies the authorization before it can call Bleak's write API. Gimbal, camera, streaming, and Wi-Fi commands are a hard denylist in `protocol/commands.py`.
+The current send allowlist contains only `set_pairing_pin`, `pairing_stage1_ack`, and `pairing_stage2`. Even those require the local owner to type the full candidate SHA-256, after which the remote runtime creates a narrow `SendAuthorization` for that one invocation. The transport decodes the frame, validates both CRCs, verifies sender/receiver and command IDs against the definition, and then applies the authorization before it can call Bleak's write API. One invocation cannot select or send another frame. Gimbal, camera, streaming, and Wi-Fi commands are a hard denylist in `protocol/commands.py`.

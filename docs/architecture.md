@@ -28,7 +28,7 @@ The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration,
 
 ## Layer boundaries
 
-- `transport`: BlueZ/Bleak discovery, connection lifecycle, FFF4 subscription, timestamped bytes, policy-gated FFF5 transmission, advertisement preservation, and GATT metadata enumeration.
+- `transport`: BlueZ/Bleak discovery, connection lifecycle, FFF4 subscription, timestamped bytes, human-gated single-frame FFF5 transmission, advertisement preservation, and GATT metadata enumeration.
 - `protocol`: DUML CRC, structured framing, stream reassembly, command metadata, transaction sequence, and deny/allow policy; it has no Bleak dependency and does not own model selection.
 - `device profile`: model fingerprints and capability tables for Pocket 3 versus Pocket 4/4P. Unknown identifiers remain raw and tolerated.
 - `video`: future RTMP/session ingestion and decoder selection.
@@ -40,4 +40,4 @@ Model checks belong only in the device-profile/capability layer. BLE transport, 
 
 ## Safety invariants
 
-Passive listen performs only BLE connection and FFF4 CCCD subscription. It neither writes FFF5 nor auto-ACKs incoming DUML requests. Pairing frames can reach the FFF5 method only with a narrow explicit authorization object, and unexpected responses stop the state machine. Wi-Fi provisioning, AP/P2P setup, video, camera commands, and gimbal movement remain prohibited. A later control layer must enforce command zeroing, maximum angular velocity/duration, and a 300–500 ms heartbeat-loss stop before motion is enabled.
+Passive listen performs only BLE connection and FFF4 CCCD subscription. It neither writes FFF5 nor auto-ACKs incoming DUML requests. A pairing frame can reach the FFF5 method only after the owning user types its complete SHA-256 in the local wrapper; one invocation writes one frame and cannot send a follow-up. The offline state machine produces `propose_*` actions rather than transport actions. Wi-Fi provisioning, AP/P2P setup, video, camera commands, and gimbal movement remain prohibited. A later control layer must enforce command zeroing, maximum angular velocity/duration, and a 300–500 ms heartbeat-loss stop before motion is enabled.

@@ -32,7 +32,7 @@ The btmon trace shows an ATT MTU request and response of 517 in both directions.
 
 The second connection had one short setup-stage disconnect before the stable active connection. The active 60-second interval had no interruption. Future summaries split setup disconnect callbacks from active-listen interruptions; the original immutable session summary retains its earlier combined count of one.
 
-Pairing is DJI application state, not BlueZ bonding. The state machine distinguishes an ordinary BLE connection, a DJI pairing-status response, a Pocket-screen approval, and stage-one/stage-two responses. It permits at most two explicitly initiated attempts, safely ignores an exact duplicate status after the state has advanced, stops on an unexpected payload, timeout, disconnect, or cancellation, and does not guess alternate IDs or payloads.
+Pairing is DJI application state, not BlueZ bonding. The offline state machine distinguishes an ordinary BLE connection, a DJI pairing-status response, a Pocket-screen approval, and stage-one/stage-two evidence. It emits `propose_*` actions only; it does not call the transport. Each proposed frame requires a separate interactive full-SHA confirmation by the owning user. It permits at most two explicitly initiated attempts, safely ignores an exact duplicate status after the state has advanced, stops on an unexpected payload, timeout, disconnect, or cancellation, and does not guess alternate IDs or payloads.
 
 See `reference-matrix.md` for public-source agreement, contradictions, and confidence labels.
 
