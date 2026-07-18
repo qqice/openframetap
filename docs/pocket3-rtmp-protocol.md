@@ -161,6 +161,26 @@ offline result is under the same-named `artifacts/sanitized` directory. The
 analysis verified the capture checksum manifest before parsing and confirmed
 that all raw files remained unchanged afterward.
 
+## Next B-class proposal boundary
+
+- 【实机事实】No remote `~/.config/openframetap/secrets.env` file existed at the
+  post-prepare audit. OpenFrameTap did not inspect NetworkManager, a keyring, or
+  any connection profile to obtain credentials.
+- 【参考实现结论】node-osmo, Moblin, and djictl independently encode the `07/47`
+  payload as one-byte UTF-8 SSID length plus SSID bytes, followed by one-byte
+  PSK length plus PSK bytes. They agree on sender `0x02`, receiver `0x07`,
+  flags `0x40`, and reference sequence `0x8C19`.
+- 【待验证假设】A same-sequence `C0/07/47` response reports the provisioning
+  result. Reviewed implementations disagree whether successful payload is two
+  or three zero bytes, so neither form will be assumed until captured locally.
+
+`pocket3-rtmp-configure-wifi-secrets` prompts with terminal echo disabled and
+stores only the user-provided test SSID/PSK in a remote `0600` file. It performs
+no BLE operation. `pocket3-rtmp-propose-wifi` then produces a private raw frame
+and a sanitized structure containing only the SSID mask/hash, PSK length/hash,
+field lengths, frame hash and CRC results. Proposal generation performs no BLE
+connection or write and cannot authorize itself.
+
 ## Secret and failure boundary
 
 - 【实机事实】No NetworkManager secret/keyring/connection file was inspected.

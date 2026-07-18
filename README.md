@@ -39,6 +39,8 @@ Run POSIX scripts from Git Bash on Windows. Set `ROCK4D_SSH_HOST` when the defau
 ./scripts/remote.sh rtmp-stop
 ./scripts/remote.sh rtmp-self-test
 ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
+./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
+./scripts/remote.sh pocket3-rtmp-propose-wifi
 ```
 
 The final command is an owner-operated, interactive, single-send wrapper for
@@ -46,6 +48,13 @@ the fixed `prepare_to_live_stream` proposal only. It verifies the approved
 frame SHA-256 before deployment and still requires the full SHA-256 to be typed
 at the terminal. It does not authorize or send Wi-Fi credentials, an RTMP URL,
 `02/8E`, stop, or any automatic follow-up frame.
+
+The Wi-Fi secret setup command requires a real TTY and uses hidden-input
+prompts. It writes only `~/.config/openframetap/secrets.env` at mode `0600`,
+backs up an existing private file, and never prints the SSID or PSK. The Wi-Fi
+proposal command is offline with respect to the Pocket: it builds `07/47` under
+private artifacts, emits only a sanitized summary, and leaves the proposal
+unsent pending a separate B-class authorization.
 
 The manual single-frame writer is documented separately and must only be invoked interactively by the device owner; Codex does not run it:
 
@@ -74,6 +83,7 @@ python -m openframetap video server doctor
 python -m openframetap pocket3 rtmp plan
 python -m openframetap pocket3 rtmp status
 python -m openframetap pocket3 rtmp analyze-prepare <private-capture-directory> --sanitized-output <sanitized-directory>
+python -m openframetap pocket3 rtmp propose wifi --secret-file <private-0600-file> --prepare-result <validated-result>
 ```
 
 See [architecture](docs/architecture.md), [Pocket 3 RTMP protocol](docs/pocket3-rtmp-protocol.md), [telemetry experiment](docs/telemetry-experiment.md), [manual pairing](docs/manual-pairing.md), [reference matrix](docs/reference-matrix.md), [hardware audit](docs/hardware-audit.md), [display baseline](docs/display-baseline.md), [protocol notes](docs/protocol-notes.md), and [roadmap](docs/roadmap.md).
