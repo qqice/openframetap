@@ -92,6 +92,7 @@ python -m openframetap pocket3 rtmp status
 python -m openframetap pocket3 rtmp analyze-prepare <private-capture-directory> --sanitized-output <sanitized-directory>
 python -m openframetap pocket3 rtmp analyze-wifi <private-capture-directory> --sanitized-output <sanitized-directory>
 python -m openframetap pocket3 rtmp propose wifi --secret-file <private-0600-file> --prepare-result <validated-result>
+python -m openframetap pocket3 rtmp propose prepare-recovery --wifi-result <validated-no-response-result>
 ```
 
 See [architecture](docs/architecture.md), [Pocket 3 RTMP protocol](docs/pocket3-rtmp-protocol.md), [telemetry experiment](docs/telemetry-experiment.md), [manual pairing](docs/manual-pairing.md), [reference matrix](docs/reference-matrix.md), [hardware audit](docs/hardware-audit.md), [display baseline](docs/display-baseline.md), [protocol notes](docs/protocol-notes.md), and [roadmap](docs/roadmap.md).

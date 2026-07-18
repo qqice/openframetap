@@ -261,6 +261,57 @@ offline analysis uses the same-named directory under `artifacts/sanitized`.
 The analyzer verified the original checksum manifest and confirmed that raw
 credential-bearing evidence was unchanged.
 
+## Missing livestream-preparation diagnosis
+
+- 【实机事实】The owner reported that Pocket did not appear in the router client
+  list after OpenFrameTap's `07/47`, while DJI Mimo caused it to associate when
+  the Pocket screen displayed “preparing livestream”. This is independent
+  device/router evidence that the earlier association attempt did not succeed.
+- 【参考实现结论】djictl implements prepare as two requests in order: `02/E1
+  payload 1A`, exact success response, then `02/8E payload 00011C00`.
+- 【参考实现结论】The public Pocket 3 Mimo capture contains exact request
+  `551104920208ffab40028e00011c003bc8`, followed shortly by a same-sequence
+  `80/02/8E` notification whose payload begins `0000011C00`. The capture labels
+  this exchange as occurring while preparing to stream.
+- 【参考实现结论】node-osmo and Moblin omit that stage2 but send a stop/cleanup
+  `02/8E` before `02/E1`. OpenFrameTap previously followed their direct
+  `02/E1 -> 07/47` path and performed neither stage2 nor cleanup.
+- 【捕获推断】The locally validated `02/E1` ACK proves stage1 was accepted, but
+  the missing `02/8E 00011C00`, absent `07/47` response, absent router client,
+  and Mimo screen behavior together make missing prepare stage2 the strongest
+  current cause.
+- 【待验证假设】The stop/cleanup command may also reset stale state, but it is a
+  broader state-changing operation and is not included in the first recovery
+  experiment. It remains separately denied.
+
+## Prepare-recovery proposal
+
+The offline proposal `prepare-recovery-20260718T181349Z` contains two fixed,
+separately confirmed frames for one BLE connection. It contains no Wi-Fi frame
+or credential.
+
+```text
+Stage 1: prepare re-entry
+wire:     02 -> 08, 40/02/E1, sequence FEAB, payload 1A
+frame:    550e04660208feab4002e11abb3c
+SHA-256: a9c619ff04901974b5c30d255730e9a807d4d1919ab05ae89504777df11a2ee5
+gate:     require same-sequence C0/02/E1 payload 00
+
+Stage 2: missing prepare transport step
+wire:     02 -> 08, 40/02/8E, sequence FFAB, payload 00011C00
+frame:    551104920208ffab40028e00011c003bc8
+SHA-256: 624c92dc2ce9364346e1b5e548f8be260b9f21e35fca20503b38315c90999286
+gate:     offered only after exact Stage 1 ACK and separate full-SHA confirmation
+```
+
+- 【实机事实】Both frames pass CRC8, CRC16, structured decode and byte-for-byte
+  round-trip. Stage 2 matches the public Pocket 3 Mimo request exactly.
+- 【实机事实】Both remain `locally_sent=false`; maximum send count is one per
+  frame, with no automatic retry or automatic follow-up.
+- 【待验证假设】A valid stage2 response and the Pocket “preparing livestream”
+  state will establish the missing prerequisite. The experiment stops there;
+  any Wi-Fi retry requires a later, separate exception proposal and approval.
+
 ## Secret and failure boundary
 
 - 【实机事实】No NetworkManager secret/keyring/connection file was inspected.
