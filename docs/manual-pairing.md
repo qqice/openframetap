@@ -87,8 +87,10 @@ Safety properties:
 - No notification callback sends data; no frame is selected without a human prompt; no command outside the three-entry pairing allowlist can be sent.
 - After the prompts it only records the stage-two response, if any, and passively listens for the requested telemetry duration.
 
-This workflow constitutes the second and final permitted application-pairing attempt. Codex must not invoke it.
+This workflow constituted the second and final permitted application-pairing attempt. The owner completed it and the Pocket returned explicit `C0/07/45 payload 00 01` (`already_paired`) after the first confirmed frame. Therefore no stage-one or stage-two candidate was proposed or sent. The archived summary records one application frame, two ATT chunks, zero automatic follow-ups, no BlueZ pairing request, and a paired state. Do not invoke the workflow again in this milestone.
 
 ## State separation
 
 BlueZ pairing/bonding is not requested. The single frame targets DJI application-layer pairing. A Pocket-screen confirmation is a separate human action. Seeing a BLE connection, continuous telemetry, or an unchanged connection is not by itself evidence that DJI application pairing succeeded.
+
+The final session does have stronger evidence than connection persistence: the Pocket returned the documented, matching-sequence `already_paired` application response. This does not create or prove a BlueZ bond.

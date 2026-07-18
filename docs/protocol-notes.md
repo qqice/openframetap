@@ -4,7 +4,7 @@
 
 BLE observation uses BlueZ through Bleak and retains manufacturer data, service data, UUIDs, platform fields, address type where exposed, RSSI, TX power, and an accompanying raw `btmon` capture. Names are only one profile signal; random addresses, abbreviated names, and unnamed devices are expected.
 
-GATT probing connects without requesting pairing and enumerates services, characteristics, descriptors, handles, properties, and MTU. It performs no characteristic value reads or writes. If `FFF0`, `FFF4`, or `FFF5` exists, only metadata is recorded. `FFF5` is never written.
+GATT probing connects without requesting pairing and enumerates services, characteristics, descriptors, handles, properties, and MTU. It performs no characteristic value reads or writes. If `FFF0`, `FFF4`, or `FFF5` exists, only metadata is recorded. The milestone-one probe path never writes `FFF5`; later pairing writes use a separate human-confirmed path.
 
 DJI company/model interpretation is isolated in `profiles.py`. A profile match is a hypothesis until validated against a real device and captured bytes. Unknown payloads stay intact rather than being rejected or assigned a Pocket model.
 
@@ -42,9 +42,21 @@ The repetition is a capture fact; interpreting it as a request awaiting the Mimo
 
 The subsequent guarded stage-one invocation is archived at `artifacts/remote/pocket3-manual-frame-20260718-211342/`. A new BLE connection delivered 397 CRC-valid passive frames but no `07/45` or `07/46` pairing traffic. The exact prerequisite was absent, so the confirmed stage-one candidate was not written: `writes_attempted=0`, `command_sent=null`, and no FFF5 ATT Write Command appears. This is a safety success and evidence that the approval transaction was connection/session-bound.
 
-The remaining allowed attempt therefore uses an owner-operated interactive TTY while preserving the same BLE connection. Every candidate is still independently displayed and confirmed by its full SHA-256; response callbacks only enqueue evidence and never write. A mismatch or declined hash stops the state machine.
+The remaining allowed attempt therefore used an owner-operated interactive TTY while preserving the same BLE connection. Every candidate was independently displayed and required its full SHA-256; response callbacks only enqueue evidence and never write. A mismatch or declined hash stops the state machine.
 
 Pairing is DJI application state, not BlueZ bonding. The offline state machine distinguishes an ordinary BLE connection, a DJI pairing-status response, a Pocket-screen approval, and stage-one/stage-two evidence. It emits `propose_*` actions only; it does not call the transport. Each proposed frame requires a separate interactive full-SHA confirmation by the owning user. It permits at most two explicitly initiated attempts, safely ignores an exact duplicate status after the state has advanced, stops on an unexpected payload, timeout, disconnect, or cancellation, and does not guess alternate IDs or payloads.
+
+## 2026-07-18 completed application pairing and passive telemetry
+
+The second and final owner-operated attempt is archived at `artifacts/remote/pocket3-manual-pair-session-20260718-213000/`. The runtime wrote only the same reviewed `set_pairing_pin` frame, SHA-256 `57725c09e6cd6f973161fb3e90fb74f1abc008f089c858df0dd7dc4ac63308a4`. The 34-byte DUML frame was split into two ordered ATT Write Commands; this is transport fragmentation, not two application commands. No stage-one or stage-two frame was proposed or sent, and `automatic_follow_up_frames` is zero.
+
+The Pocket returned CRC-valid `550f04a2070272aac0074500019b5b`: sender/receiver `07/02`, matching sequence `72AA`, flags `C0`, command `07/45`, and payload `00 01`. The first recorded notification timestamp is about 84.8 ms after the completed frame write. The state machine decoded the explicit response as `already_paired`, entered `paired`, and then listened passively for 60 seconds. `bluez_pairing_requested` is false, so this is strong local evidence of DJI application-layer pairing, not BlueZ bonding.
+
+The session ran for 65.78 seconds and captured 2,531 notifications and 2,531 DUML frames. All 2,531 passed CRC8 and CRC16; invalid lengths, discarded bytes, truncated fragments, reassembly failures, and connection interruptions were all zero. The command counts were `00/74` 16, `00/81` 64, `00/F1` 97, `02/80` 643, `02/DC` 161, `04/05` 645, `04/1C` 129, `04/27` 645, `04/38` 65, `07/45` 1, and `0D/02` 65.
+
+The 65 `0D/02` payloads all had the plausible value 100 at reference-derived offset 20, but this remains a medium-confidence battery candidate until correlated with the Pocket display. The 64 `00/81` frames retained stable ASCII `hg212`; mapping that token to Pocket 3 remains medium-confidence. All 645 `04/05` raw payloads were distinct, supporting a live gimbal-status family classification, but no pitch/roll/yaw field is decoded without a controlled physical correlation.
+
+The immutable session artifact used the then-current label `pairing_started` for 643 `02/80` frames. Because those frames continued at roughly 10 Hz before and throughout the 60-second interval after the explicit `already_paired` response, the local capture disproves that semantic label. The decoder now reports `camera_status_02_80_candidate` at low confidence, preserves the raw payload, and explicitly records that the prior pairing-started interpretation was rejected. The source fixture's historical label remains only as provenance.
 
 See `reference-matrix.md` for public-source agreement, contradictions, and confidence labels.
 

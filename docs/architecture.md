@@ -24,7 +24,7 @@ Existing five-point touch input
 Future joystick/buttons and gimbal controller
 ```
 
-The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration, DUML codec, stream reassembly, passive FFF4 notification capture, conservative telemetry recording, and an offline pairing state machine now exist. Active DJI application-layer pairing remains gated behind explicit first-write authorization. Video, Wi-Fi provisioning, UI, and control remain roadmap items.
+The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration, DUML codec, stream reassembly, passive FFF4 notification capture, conservative telemetry recording, and application-layer pairing state machine now exist. The Pocket 3 returned an explicit `already_paired` application response after the owner's final confirmed frame. Video, Wi-Fi provisioning, UI, and control remain roadmap items and were not entered.
 
 ## Layer boundaries
 

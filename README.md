@@ -1,6 +1,6 @@
 # OpenFrameTap
 
-OpenFrameTap is an open-source remote monitoring and control terminal prototype for DJI Osmo Pocket cameras. The current milestone adds a tested DJI DUML codec, streaming frame reassembly, passive `FFF4` notification capture, conservative telemetry recording, and an offline Pocket 3 application-pairing state machine. Any first `FFF5` write remains blocked until its exact frame receives explicit user authorization.
+OpenFrameTap is an open-source remote monitoring and control terminal prototype for DJI Osmo Pocket cameras. The current milestone includes a tested DJI DUML codec, streaming frame reassembly, passive `FFF4` notification capture, conservative telemetry recording, and a hardware-validated Pocket 3 application-pairing state machine. The owner completed the two permitted pairing attempts: the first required Pocket-screen confirmation and the second returned an explicit `already_paired` response. Every `FFF5` frame was separately authorized by the owner; no automatic follow-up was sent.
 
 The Git repository on the local computer is the only source of truth. Files are deployed through SSH to `~/openframetap-runtime` on the ROCK 4D, while all remote evidence is copied back to ignored local `artifacts/remote/` directories.
 
@@ -42,6 +42,8 @@ For a transaction whose sequence is valid only inside one BLE connection, the ow
 ```bash
 ./scripts/remote.sh pocket3-manual-pair-session 60
 ```
+
+The permitted pairing attempts are now complete. The command remains documented for reproducibility but must not be run again in this milestone.
 
 `setup-python` creates only `~/openframetap-runtime/.venv` and installs this project plus Bleak there. It never uses `sudo pip` or changes the system Python environment.
 
