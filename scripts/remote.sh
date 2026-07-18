@@ -271,7 +271,7 @@ cd $REMOTE_DIR
     trap - EXIT INT TERM
     pull_file runtime/rtmp/server.log "$private_dir" || true
     if [[ -f "$private_dir/server.log" ]]; then
-      sha256sum "$private_dir/server.log" >>"$private_dir/checksums.sha256"
+      (cd "$private_dir" && sha256sum server.log >>checksums.sha256)
     fi
     printf '[openframetap] PRIVATE_ARTIFACT_DIR=%s\n' "$private_dir"
     printf '[openframetap] SANITIZED_ARTIFACT_DIR=%s\n' "$sanitized_dir"
