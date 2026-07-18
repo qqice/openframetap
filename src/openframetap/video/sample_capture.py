@@ -80,6 +80,7 @@ def run_rtmp_selftest(
     frame_png = private_dir / "first-frame.png"
     producer_log = private_dir / "producer.stderr.txt"
     probe_raw_path = private_dir / "ffprobe.json"
+    probe_error_path = private_dir / "ffprobe.stderr.txt"
     decode_log = private_dir / "decode.stderr.txt"
     session = VideoSession(kind="local-rtmp-self-test")
     parsed = urlsplit(url)
@@ -127,7 +128,11 @@ def run_rtmp_selftest(
             stderr=producer_stderr,
         )
     try:
-        time.sleep(2.0)
+        # Windows FFmpeg can need more than two seconds to initialize libx264
+        # and send the RTMP publish command. Readers fail immediately when a
+        # MediaMTX path does not exist yet, so stay on the deterministic side
+        # of that startup boundary instead of racing the publisher.
+        time.sleep(4.0)
         if producer.poll() is not None:
             raise SelfTestError(f"RTMP producer exited early with status {producer.returncode}")
         probe = subprocess.run(
@@ -148,6 +153,7 @@ def run_rtmp_selftest(
             check=False,
             timeout=10,
         )
+        probe_error_path.write_text(probe.stderr, encoding="utf-8")
         if probe.returncode != 0:
             raise SelfTestError(f"ffprobe failed with status {probe.returncode}")
         try:
@@ -258,4 +264,3 @@ def run_rtmp_selftest(
         return summary
     finally:
         _terminate(producer)
-
