@@ -39,6 +39,7 @@ Run POSIX scripts from Git Bash on Windows. Set `ROCK4D_SSH_HOST` when the defau
 ./scripts/remote.sh rtmp-stop
 ./scripts/remote.sh rtmp-self-test
 ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
+./scripts/remote.sh pocket3-rtmp-send-approved-wifi
 ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
 ./scripts/remote.sh pocket3-rtmp-propose-wifi
 ```
@@ -55,6 +56,12 @@ backs up an existing private file, and never prints the SSID or PSK. The Wi-Fi
 proposal command is offline with respect to the Pocket: it builds `07/47` under
 private artifacts, emits only a sanitized summary, and leaves the proposal
 unsent pending a separate B-class authorization.
+
+`pocket3-rtmp-send-approved-wifi` is a separate owner-operated wrapper pinned
+to one private proposal SHA-256. It refuses non-TTY use, a consumed workflow,
+address/hash/fingerprint/CRC mismatch, retry, and every command other than the
+approved `07/47`. It never prints the sensitive frame and performs no automatic
+RTMP configuration or follow-up.
 
 The manual single-frame writer is documented separately and must only be invoked interactively by the device owner; Codex does not run it:
 

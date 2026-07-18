@@ -210,6 +210,23 @@ stem. This B-class command is still unsent and requires its own owner approval.
 Approval would cover only this exact frame SHA-256, not RTMP configuration,
 start, `02/8E`, stop, retry, or any other command.
 
+## B-class owner execution boundary
+
+- 【实机事实】On 2026-07-19 the owner approved the first, single send of the
+  private `wifi_connect` frame whose SHA-256 is
+  `8751117a3022d1a0057a4d6ea1ef38505314d1d75995fd4d46fc8d85e25ed72e`.
+  It remains unsent pending owner execution.
+- 【实机事实】The fixed owner entry point is
+  `./scripts/remote.sh pocket3-rtmp-send-approved-wifi`. It accepts no frame,
+  SSID, PSK, command, sequence, or arbitrary hex argument.
+- 【实机事实】Before opening the remote TTY, the wrapper checks the exact private
+  binary SHA-256, proposal command, and `wifi_proposed` workflow phase. The
+  runtime then revalidates target address, secret fingerprints, wire fields,
+  CRCs, one-send policy, and full SHA confirmation.
+- 【实机事实】The capture subscribes FFF4 before the one FFF5 write, listens for
+  30 seconds, and records private btmon/notification/DUML evidence. It sends no
+  response, retry, RTMP configuration, `02/8E`, start, or stop command.
+
 ## Secret and failure boundary
 
 - 【实机事实】No NetworkManager secret/keyring/connection file was inspected.
@@ -217,8 +234,9 @@ start, `02/8E`, stop, retry, or any other command.
 - 【实机事实】Private proposal and workflow files are restricted to
   `artifacts/private`; sanitized structures contain address hashes/masks rather
   than the complete Pocket address.
-- 【实机事实】The Wi-Fi proposal generator is not invoked at this stop point.
-  Therefore no SSID or PSK has been requested, encoded, logged, or persisted.
+- 【实机事实】The Wi-Fi proposal generator stored the raw credential-bearing
+  frame only in ignored private artifacts. Sanitized output contains the SSID
+  mask/hash and PSK length/hash but no credential value, payload, or raw frame.
 - 【已否定假设】An early offline proposal state referenced an empty pairing
   evidence SHA because the operator-side evidence filename was wrong. The
   loader now requires both 64-character prerequisite hashes, the invalid
