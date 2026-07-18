@@ -130,7 +130,6 @@ bash scripts/collect-display-state.sh"
     run_remote setup-python "set -eu
 cd $REMOTE_DIR
 python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -e ."
     ;;
   ble-scan)
@@ -150,18 +149,17 @@ bash scripts/capture-ble.sh $seconds"
     [[ $# -eq 2 ]] || { usage >&2; exit 2; }
     address="$2"
     deploy || exit $?
-    run_remote ble-probe "set -eu
+    run_remote ble-probe "set -u
 cd $REMOTE_DIR
 .venv/bin/python -m openframetap ble probe '$address' --json artifacts/gatt-probe.json"
     status=$?
-    [[ $status -eq 0 ]] || exit "$status"
     stamp="$(timestamp)"
     destination="$REMOTE_ARTIFACTS/gatt-${stamp}"
-    pull_file artifacts/gatt-probe.json "$destination"
+    pull_file artifacts/gatt-probe.json "$destination" || true
+    exit "$status"
     ;;
   *)
     usage >&2
     exit 2
     ;;
 esac
-
