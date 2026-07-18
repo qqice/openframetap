@@ -45,6 +45,12 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def checksum_manifest(paths: list[Path], root: Path) -> str:
+    return "".join(
+        f"{_sha256(path)}  {path.relative_to(root).as_posix()}\n" for path in paths
+    )
+
+
 def _redact(value: str) -> str:
     if not value.startswith(("rtmp://", "rtsp://")):
         return value
@@ -372,6 +378,7 @@ def run_preview(
     if screenshot_path.is_file():
         checks.append(screenshot_path)
     (private_dir / "checksums.sha256").write_text(
-        "".join(f"{_sha256(path)}  {path.name}\n" for path in checks), encoding="ascii"
+        checksum_manifest(checks, private_dir),
+        encoding="ascii",
     )
     return payload

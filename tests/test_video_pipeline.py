@@ -10,6 +10,7 @@ from openframetap.display.session import parse_loginctl_session, parse_overview_
 from openframetap.video.decoder_probe import parse_gst_inspect
 from openframetap.video.metrics import read_temperature_c, summarize_metrics, MetricSample
 from openframetap.video.live_preview import (
+    checksum_manifest,
     decode_error_lines,
     parse_fps_messages,
     parse_frame_reports,
@@ -174,6 +175,15 @@ def test_structured_frame_reports_preserve_monotonic_clock() -> None:
         '"dropped_frames": 1, "current_fps": 29.8}\n'
     )
     assert parse_frame_reports(text)[0]["monotonic_ns"] == 123
+
+
+def test_checksum_manifest_uses_portable_relative_paths(tmp_path: Path) -> None:
+    screenshot = tmp_path / "screenshots" / "preview.png"
+    screenshot.parent.mkdir()
+    screenshot.write_bytes(b"frame")
+    manifest = checksum_manifest([screenshot], tmp_path)
+    assert manifest.endswith("  screenshots/preview.png\n")
+    assert str(tmp_path) not in manifest
 
 
 def test_wayland_fullscreen_is_only_applied_after_first_frame() -> None:
