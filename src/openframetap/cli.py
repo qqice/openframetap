@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 from openframetap.ble_scan import load_replay, render_scan, scan, scan_payload
@@ -123,6 +124,14 @@ def build_parser() -> argparse.ArgumentParser:
     video_server_commands.add_parser("start", help="start the user-owned RTMP listener")
     video_server_commands.add_parser("stop", help="stop only the PID owned by this runtime")
     video_server_commands.add_parser("status", help="report listener and PID status")
+    video_self_test = video_commands.add_parser(
+        "self-test", help="publish a local test source and read it back from RTMP"
+    )
+    video_self_test.add_argument("--url", required=True)
+    video_self_test.add_argument("--private-output", type=Path, required=True)
+    video_self_test.add_argument("--sanitized-output", type=Path, required=True)
+    video_self_test.add_argument("--ffmpeg-bin")
+    video_self_test.add_argument("--ffprobe-bin")
 
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
@@ -206,6 +215,22 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0 if ok else 1
+    if args.command == "video" and args.video_command == "self-test":
+        from openframetap.video.sample_capture import SelfTestError, run_rtmp_selftest
+
+        try:
+            payload = run_rtmp_selftest(
+                url=args.url,
+                private_output=args.private_output,
+                sanitized_output=args.sanitized_output,
+                ffmpeg_bin=args.ffmpeg_bin,
+                ffprobe_bin=args.ffprobe_bin,
+            )
+        except (OSError, SelfTestError, subprocess.SubprocessError) as exc:
+            print(f"RTMP_SELF_TEST_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
     if args.command == "ble" and args.ble_command == "scan":
         if args.seconds <= 0:
             raise SystemExit("--seconds must be positive")

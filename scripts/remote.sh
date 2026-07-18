@@ -10,6 +10,9 @@ POCKET3_ADDRESS="${POCKET3_BLE_ADDRESS:-E4:7A:2C:36:DC:FC}"
 MEDIAMTX_VERSION="v1.18.2"
 MEDIAMTX_SHA256="c78aa7a1bdab94b2b02be364661f17802143215dba37e1fa67c3e0849248b485"
 MEDIAMTX_CACHE="${OPENFRAMETAP_MEDIAMTX_CACHE:-$ROOT_DIR/artifacts/private/tool-cache/mediamtx/$MEDIAMTX_VERSION}"
+LOCAL_PYTHON_BIN="${OPENFRAMETAP_LOCAL_PYTHON_BIN:-$ROOT_DIR/.venv/Scripts/python.exe}"
+LOCAL_FFMPEG_BIN="${OPENFRAMETAP_LOCAL_FFMPEG_BIN:-/c/ffmpeg/bin/ffmpeg.exe}"
+LOCAL_FFPROBE_BIN="${OPENFRAMETAP_LOCAL_FFPROBE_BIN:-/c/ffmpeg/bin/ffprobe.exe}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
 SCP_BIN="${OPENFRAMETAP_SCP_BIN:-scp}"
 SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
@@ -151,6 +154,7 @@ Usage:
   ./scripts/remote.sh rtmp-start
   ./scripts/remote.sh rtmp-status
   ./scripts/remote.sh rtmp-stop
+  ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
@@ -217,7 +221,61 @@ cd $REMOTE_DIR
     deploy || exit $?
     run_remote rtmp-stop "set -eu
 cd $REMOTE_DIR
-.venv/bin/python -m openframetap video server stop"
+    .venv/bin/python -m openframetap video server stop"
+    ;;
+  rtmp-self-test)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -x "$LOCAL_PYTHON_BIN" && -x "$LOCAL_FFMPEG_BIN" && -x "$LOCAL_FFPROBE_BIN" ]] || {
+      echo 'Local Python/FFmpeg/FFprobe tools required for LAN self-test are unavailable.' >&2
+      exit 2
+    }
+    deploy || exit $?
+    run_remote rtmp-selftest-address "set -eu
+cd $REMOTE_DIR
+ip=\$(ip -4 -o addr show dev wlan0 scope global | awk 'NR==1 {split(\$4,a,\"/\"); print a[1]}')
+case \"\$ip\" in 10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;; *) exit 6 ;; esac
+printf 'WLAN_IP=%s\\n' \"\$ip\""
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    wlan_ip="$(extract_stem WLAN_IP | tr -d '\r')"
+    [[ -n "$wlan_ip" ]] || { echo 'Missing sanitized wlan0 IP marker' >&2; exit 3; }
+    stamp="$(timestamp)"
+    key="openframetap-selftest-${stamp}"
+    private_dir="$ROOT_DIR/artifacts/private/rtmp-selftest-${stamp}"
+    sanitized_dir="$ROOT_DIR/artifacts/sanitized/rtmp-selftest-${stamp}"
+    mkdir -p "$private_dir" "$sanitized_dir"
+    server_started=0
+    selftest_cleanup() {
+      if [[ "$server_started" -eq 1 ]]; then
+        run_remote rtmp-selftest-stop "set -u
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server stop" || true
+        server_started=0
+      fi
+    }
+    trap selftest_cleanup EXIT INT TERM
+    run_remote rtmp-selftest-start "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server start"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    server_started=1
+    "$LOCAL_PYTHON_BIN" -m openframetap video self-test \
+      --url "rtmp://$wlan_ip:1935/live/$key" \
+      --private-output "$private_dir" \
+      --sanitized-output "$sanitized_dir" \
+      --ffmpeg-bin "$LOCAL_FFMPEG_BIN" \
+      --ffprobe-bin "$LOCAL_FFPROBE_BIN"
+    status=$?
+    selftest_cleanup
+    trap - EXIT INT TERM
+    pull_file runtime/rtmp/server.log "$private_dir" || true
+    if [[ -f "$private_dir/server.log" ]]; then
+      sha256sum "$private_dir/server.log" >>"$private_dir/checksums.sha256"
+    fi
+    printf '[openframetap] PRIVATE_ARTIFACT_DIR=%s\n' "$private_dir"
+    printf '[openframetap] SANITIZED_ARTIFACT_DIR=%s\n' "$sanitized_dir"
+    exit "$status"
     ;;
   doctor)
     deploy || exit $?
