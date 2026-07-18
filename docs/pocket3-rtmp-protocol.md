@@ -420,3 +420,30 @@ same authorization.
   never acknowledges provisioning. With the two-stage prepare prerequisite in
   the same BLE connection, the same Pocket returned an explicit `C0/07/47`
   success-form response.
+
+## C-class stream proposal
+
+- 【实机事实】MediaMTX v1.18.2 is running as user `qqice` and remains reachable
+  on the ROCK `wlan0` listener `192.168.1.229:1935`. The RTMP stream key exists
+  only in the mode-0600 remote secret file and private proposal.
+- 【参考实现结论】node-osmo and Moblin agree that Pocket 3 uses one `40/08/78`
+  request containing fixed byte `0x2E`, resolution, little-endian bitrate,
+  frame-rate selector, reserved bytes, and a two-byte-length-prefixed RTMP URL.
+  Their Pocket 3 flow treats this request as the stream-starting message.
+- 【参考实现结论】djictl agrees on `08/78`, field ordering, resolution, bitrate,
+  FPS and URL packing, but emits fixed byte `0x2A` for Pocket 3 and then sends a
+  separate `02/8E` start request. This unresolved conflict prevents a high
+  confidence rating.
+- 【捕获推断】The minimal first experiment follows the two agreeing Pocket 3
+  implementations and uses `0x2E`, 720p, 30 fps and 4000 Kbps. It does not
+  include djictl's separately gated `02/8E` start payload.
+- 【实机事实】The private C-class frame is 66 bytes, sequence `0x8C2C`, passes
+  CRC8/CRC16 and byte-for-byte round trip, and has SHA-256
+  `0765f4462b530b05071172f0175bed14f70720b4479b414ce89dea44481a7fc4`.
+  The sanitized proposal contains only the fixed LAN endpoint, stream-key
+  length/hash, media parameters and frame hash; it contains no key, full URL,
+  payload or raw frame.
+- 【待验证假设】This single `08/78` request will either return a same-sequence
+  response or cause Pocket 3 to open the first RTMP TCP connection. If neither
+  occurs, the separate `02/8E` start command remains a later proposal; it will
+  not be guessed or sent automatically.

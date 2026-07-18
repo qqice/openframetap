@@ -14,7 +14,7 @@ proposal_path="${4:-}"
 workflow_state_path="${5:-}"
 wifi_proposal_path="${5:-}"
 combined_workflow_state_path="${6:-}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] || {
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] || {
   echo 'unsupported capture operation' >&2
   exit 2
 }
@@ -31,18 +31,19 @@ case "$operation" in
   experiment) prefix="pocket3-experiment" ;;
   rtmp-proposal) prefix="pocket3-rtmp-prepare" ;;
   rtmp-wifi-proposal) prefix="pocket3-rtmp-wifi" ;;
+  rtmp-stream-proposal) prefix="pocket3-rtmp-stream" ;;
   rtmp-prepare-recovery) prefix="pocket3-rtmp-prepare-recovery" ;;
   rtmp-prepare-wifi-recovery) prefix="pocket3-rtmp-prepare-wifi-recovery" ;;
 esac
 stem="$prefix-$stamp"
-if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
+if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
   artifact_relative="private/$stem"
 else
   artifact_relative="$stem"
 fi
 output_dir="artifacts/$artifact_relative"
 mkdir -p "$output_dir"
-[[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] && chmod 700 "$output_dir"
+[[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] && chmod 700 "$output_dir"
 snoop_path="$output_dir/capture.btsnoop"
 text_path="$output_dir/btmon.txt"
 session_output="$output_dir/session-output.txt"
@@ -96,12 +97,13 @@ stop_btmon() {
 }
 
 finalize_checksums() {
-  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-prepare-recovery" && "$operation" != "rtmp-prepare-wifi-recovery" ]]; then
+  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-stream-proposal" && "$operation" != "rtmp-prepare-recovery" && "$operation" != "rtmp-prepare-wifi-recovery" ]]; then
     return 0
   fi
   local names=(capture.btsnoop btmon.txt notifications.jsonl duml-frames.jsonl events.jsonl)
-  if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" ]]; then
+  if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" ]]; then
     names+=(summary.json transmission.json session-output.txt)
+    [[ "$operation" == "rtmp-stream-proposal" ]] && names+=(server.log)
   elif [[ "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
     names+=(summary.json recovery-candidates.jsonl recovery-events.jsonl session-output.txt)
   fi
@@ -203,7 +205,7 @@ case "$operation" in
     trap cleanup INT TERM EXIT
     exit "$experiment_status"
     ;;
-  rtmp-proposal|rtmp-wifi-proposal)
+  rtmp-proposal|rtmp-wifi-proposal|rtmp-stream-proposal)
     [[ -t 0 || "${OPENFRAMETAP_TEST_MODE:-0}" == "1" ]] || {
       echo 'RTMP proposal send requires an interactive TTY' >&2
       exit 4
@@ -248,6 +250,11 @@ case "$operation" in
 esac
 session_status=${PIPESTATUS[0]}
 set -e
+
+if [[ "$operation" == "rtmp-stream-proposal" && -f runtime/rtmp/server.log ]]; then
+  cp runtime/rtmp/server.log "$output_dir/server.log"
+  chmod 600 "$output_dir/server.log" 2>/dev/null || true
+fi
 
 stop_btmon
 finalize_checksums

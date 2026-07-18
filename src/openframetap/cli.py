@@ -611,6 +611,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "pocket3" and args.pocket3_command == "rtmp":
         from openframetap.devices.pocket3_livestream import (
             load_fixed_proposal,
+            load_fixed_stream_proposal,
             load_fixed_wifi_proposal,
             write_prepare_recovery_proposal,
             write_prepare_proposal,
@@ -928,6 +929,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 expected_phase = "prepare_proposed"
                 sent_phase = "prepare_sent"
+            elif proposal_header.get("stage") == "stream":
+                proposal, raw = load_fixed_stream_proposal(
+                    args.proposal, expected_address=args.address
+                )
+                expected_phase = "stream_proposed"
+                sent_phase = "stream_sent"
             else:
                 print("REFUSED: proposal stage is not in the single-send allowlist")
                 return 4
@@ -936,9 +943,23 @@ def main(argv: list[str] | None = None) -> int:
             if workflow.phase != expected_phase:
                 print(f"REFUSED: workflow is {workflow.phase}, expected {expected_phase}")
                 return 4
-            typed = input(
-                f"Type the full SHA-256 for {proposal['command']} to send once, or Enter to stop: "
-            ).strip().lower()
+            if proposal_header.get("stage") == "stream":
+                invoked = os.environ.get("OPENFRAMETAP_COMMAND_INVOCATION_APPROVAL") == "1"
+                fixed_digest = os.environ.get(
+                    "OPENFRAMETAP_FIXED_PROPOSAL_SHA256", ""
+                ).lower()
+                if not invoked or fixed_digest != digest:
+                    print(
+                        "REFUSED: stream proposal requires the fixed owner-invoked "
+                        "wrapper bound to its SHA-256."
+                    )
+                    return 4
+                typed = digest
+            else:
+                typed = input(
+                    f"Type the full SHA-256 for {proposal['command']} to send once, "
+                    "or Enter to stop: "
+                ).strip().lower()
             if typed != digest:
                 print("REFUSED: confirmation mismatch; no BLE connection was attempted.")
                 return 4

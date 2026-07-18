@@ -101,8 +101,9 @@ async def manual_send_pocket3_frame(
     decoded = decode_duml_frame(raw)
     if not (decoded.crc8_valid and decoded.crc16_valid):
         raise ValueError("candidate frame CRC validation failed")
-    authorization = SendAuthorization.single_command(
+    authorization = SendAuthorization.explicit_single_frame(
         command_name,
+        frame_sha256=digest,
         purpose="one fixed user-confirmed DUML proposal",
         approval_reference=f"manual-frame-sha256:{digest}",
     )

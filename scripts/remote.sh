@@ -24,6 +24,8 @@ APPROVED_WIFI_RECOVERY_SHA256="8c4de55a03533eba4ef59d038acada497aedcf33a449c67bd
 APPROVED_WIFI_RECOVERY_DIR="$ROOT_DIR/artifacts/private/proposals/wifi-20260718T184319Z"
 PREPARE_RECOVERY_RESULT="$ROOT_DIR/artifacts/private/pocket3-rtmp-prepare-recovery-20260719-023518/summary.json"
 PREPARE_RECOVERY_RESULT_SHA256="34e0dfd95a52336e620edfa2206a05bd14fad533140fa793b85b89356285e9a1"
+APPROVED_STREAM_SHA256="0765f4462b530b05071172f0175bed14f70720b4479b414ce89dea44481a7fc4"
+APPROVED_STREAM_DIR="$ROOT_DIR/artifacts/private/proposals/stream-20260718T192544Z"
 RTMP_WORKFLOW_STATE="${OPENFRAMETAP_RTMP_WORKFLOW_STATE:-$ROOT_DIR/artifacts/private/pocket3-rtmp-workflow.json}"
 PREPARE_RESULT="${OPENFRAMETAP_PREPARE_RESULT:-$ROOT_DIR/artifacts/sanitized/pocket3-rtmp-prepare-20260719-010705/prepare-result.json}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
@@ -172,6 +174,7 @@ Usage:
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-recovery
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare-wifi-recovery
+  ./scripts/remote.sh pocket3-rtmp-send-approved-stream
   ./scripts/remote.sh pocket3-rtmp-configure-wifi-secrets
   ./scripts/remote.sh pocket3-rtmp-configure-stream-key
   ./scripts/remote.sh pocket3-rtmp-propose-wifi
@@ -569,6 +572,71 @@ chmod 600 artifacts/private/approved-prepare-wifi-recovery/*.json artifacts/priv
       exit 3
     }
     pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    exit "$status"
+    ;;
+  pocket3-rtmp-send-approved-stream)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: fixed stream send requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    proposal_json="$APPROVED_STREAM_DIR/proposal-private.json"
+    proposal_bin="$APPROVED_STREAM_DIR/proposal.bin"
+    approval_consumed="$APPROVED_STREAM_DIR/owner-command-invocation.consumed"
+    [[ -f "$proposal_json" && -f "$proposal_bin" && -f "$RTMP_WORKFLOW_STATE" ]] || {
+      echo '[openframetap] Fixed stream proposal or workflow state is missing.' >&2
+      exit 2
+    }
+    [[ ! -e "$approval_consumed" ]] || {
+      echo '[openframetap] Refused: this fixed one-time stream authorization is already consumed.' >&2
+      exit 4
+    }
+    grep -Eq '"phase"[[:space:]]*:[[:space:]]*"stream_proposed"' "$RTMP_WORKFLOW_STATE" || {
+      echo '[openframetap] Refused: fixed stream send requires stream_proposed state.' >&2
+      exit 4
+    }
+    actual_sha256="$(sha256sum "$proposal_bin" | awk '{print tolower($1)}')"
+    [[ "$actual_sha256" == "$APPROVED_STREAM_SHA256" ]] || {
+      echo '[openframetap] Fixed stream proposal SHA-256 mismatch.' >&2
+      exit 5
+    }
+    grep -Fq "\"frame_sha256\": \"$APPROVED_STREAM_SHA256\"" "$proposal_json" || exit 5
+    grep -Fq '"command": "configure_live_stream"' "$proposal_json" || exit 5
+    grep -Fq '"cmd_id": "0x78"' "$proposal_json" || exit 5
+    printf '%s\n' '[openframetap] COMMAND INVOCATION AUTHORIZES ONE FIXED 08/78 STREAM FRAME.'
+    printf '[openframetap] Frame SHA-256: %s (private RTMP URL redacted)\n' "$APPROVED_STREAM_SHA256"
+    printf '%s\n' '[openframetap] No retry, 02/8E start/stop, Wi-Fi, camera, or gimbal frame is included.'
+    printf 'consumed_at_utc=%s\nframe_sha256=%s\n' "$(timestamp)" "$APPROVED_STREAM_SHA256" \
+      >"$approval_consumed"
+    deploy || exit $?
+    run_remote rtmp-stream-send-stage "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server status | grep -q '\"state\": \"running\"'
+mkdir -p artifacts/private/approved-stream
+chmod 700 artifacts/private artifacts/private/approved-stream"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$proposal_json" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/approved-stream/proposal-private.json.new" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$RTMP_WORKFLOW_STATE" \
+      "$TARGET:${REMOTE_DIR#\~/}/artifacts/private/pocket3-rtmp-workflow.json.new" || exit $?
+    run_remote rtmp-stream-send-finalize "set -eu
+cd $REMOTE_DIR
+mv artifacts/private/approved-stream/proposal-private.json.new artifacts/private/approved-stream/proposal-private.json
+mv artifacts/private/pocket3-rtmp-workflow.json.new artifacts/private/pocket3-rtmp-workflow.json
+chmod 600 artifacts/private/approved-stream/proposal-private.json artifacts/private/pocket3-rtmp-workflow.json"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    run_remote_interactive rtmp-stream-send \
+      "cd $REMOTE_DIR && OPENFRAMETAP_COMMAND_INVOCATION_APPROVAL=1 OPENFRAMETAP_FIXED_PROPOSAL_SHA256='$APPROVED_STREAM_SHA256' bash scripts/capture-pocket3.sh rtmp-stream-proposal '$POCKET3_ADDRESS' 60 'artifacts/private/approved-stream/proposal-private.json' 'artifacts/private/pocket3-rtmp-workflow.json'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ "$stem" == private/pocket3-rtmp-stream-* ]] || {
+      echo '[openframetap] Missing private stream-send artifact marker' >&2
+      exit 3
+    }
+    pull_dir "artifacts/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_file artifacts/private/pocket3-rtmp-workflow.json "$ROOT_DIR/artifacts/private" || true
     exit "$status"
     ;;
   pocket3-rtmp-configure-wifi-secrets)

@@ -314,6 +314,24 @@ def test_approved_prepare_wifi_recovery_wrapper_requires_real_terminal_before_ss
     assert "Exit status: 37" not in result.stdout
 
 
+def test_approved_stream_wrapper_requires_real_terminal_before_ssh() -> None:
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "pocket3-rtmp-send-approved-stream"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert "requires the device owner at a real terminal" in result.stderr
+    assert "Exit status: 37" not in result.stdout
+
+
 def test_wifi_secret_wrapper_requires_real_terminal_before_ssh() -> None:
     env = os.environ.copy()
     env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
@@ -378,6 +396,7 @@ def test_wifi_proposal_wrapper_propagates_deploy_failure(tmp_path: Path) -> None
     (
         ("rtmp-proposal", "private/pocket3-rtmp-prepare-"),
         ("rtmp-wifi-proposal", "private/pocket3-rtmp-wifi-"),
+        ("rtmp-stream-proposal", "private/pocket3-rtmp-stream-"),
         ("rtmp-prepare-recovery", "private/pocket3-rtmp-prepare-recovery-"),
     ),
 )
