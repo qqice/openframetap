@@ -23,6 +23,8 @@ from openframetap.workflows.pocket3_rtmp import Pocket3RtmpWorkflow
 
 
 ADDRESS = "00:11:22:33:44:55"
+EVIDENCE_SHA = "1" * 64
+PAIRING_EVIDENCE = "paired-session-sha256:" + "2" * 64
 
 
 def test_prepare_frame_round_trip_and_allowlist() -> None:
@@ -54,6 +56,8 @@ def test_prepare_proposal_sha_address_and_sanitization(tmp_path: Path) -> None:
         address=ADDRESS,
         private_root=tmp_path / "artifacts" / "private" / "proposals",
         sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
+        server_evidence_sha256=EVIDENCE_SHA,
+        pairing_evidence=PAIRING_EVIDENCE,
     )
     private_path = Path(payload["private_proposal"])
     private, raw = load_fixed_proposal(private_path, expected_address=ADDRESS)
@@ -70,6 +74,8 @@ def test_tampered_or_wrong_address_proposal_is_rejected(tmp_path: Path) -> None:
         address=ADDRESS,
         private_root=tmp_path / "artifacts" / "private" / "proposals",
         sanitized_root=tmp_path / "artifacts" / "sanitized" / "proposals",
+        server_evidence_sha256=EVIDENCE_SHA,
+        pairing_evidence=PAIRING_EVIDENCE,
     )
     path = Path(payload["private_proposal"])
     with pytest.raises(PermissionError, match="address"):

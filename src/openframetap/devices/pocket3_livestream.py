@@ -34,6 +34,8 @@ def write_prepare_proposal(
     private_root: Path,
     sanitized_root: Path,
     sequence: int = 0x8C12,
+    server_evidence_sha256: str,
+    pairing_evidence: str,
 ) -> dict:
     command = LIVESTREAM_COMMANDS["prepare_to_live_stream"]
     frame = build_prepare_to_live_stream_frame(sequence=sequence)
@@ -58,6 +60,10 @@ def write_prepare_proposal(
         "max_send_count": 1,
         "automatic_retry": False,
         "automatic_follow_up": False,
+        "evidence": {
+            "server_selftest_sha256": server_evidence_sha256,
+            "prior_pairing_evidence": pairing_evidence,
+        },
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "decoded": decoded.to_dict(),
     }
@@ -95,6 +101,10 @@ def write_prepare_proposal(
         "max_send_count": 1,
         "automatic_retry": False,
         "automatic_follow_up": False,
+        "evidence": {
+            "server_selftest_sha256": server_evidence_sha256,
+            "prior_pairing_evidence": pairing_evidence,
+        },
         "expected_response": "same-sequence C0/02/E1 payload 00 (reference-derived)",
         "risk": "may change the Pocket application into livestream preparation state",
     }
@@ -114,7 +124,14 @@ def write_prepare_proposal(
 
 def load_fixed_proposal(path: Path, *, expected_address: str) -> tuple[dict, bytes]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    required = {"schema_version", "command", "target_address", "frame_hex", "frame_sha256"}
+    required = {
+        "schema_version",
+        "command",
+        "target_address",
+        "frame_hex",
+        "frame_sha256",
+        "evidence",
+    }
     if not required.issubset(payload) or payload.get("max_send_count") != 1:
         raise PermissionError("proposal schema or single-send limit is invalid")
     if payload["target_address"].upper() != expected_address.upper():
@@ -122,10 +139,14 @@ def load_fixed_proposal(path: Path, *, expected_address: str) -> tuple[dict, byt
     raw = bytes.fromhex(payload["frame_hex"])
     if hashlib.sha256(raw).hexdigest() != payload["frame_sha256"].lower():
         raise PermissionError("proposal frame SHA-256 mismatch")
+    evidence = payload.get("evidence") or {}
+    server_sha = evidence.get("server_selftest_sha256", "")
+    pairing_reference = evidence.get("prior_pairing_evidence", "")
+    if len(server_sha) != 64 or not pairing_reference.rsplit(":", 1)[-1]:
+        raise PermissionError("proposal prerequisite evidence is missing or invalid")
     command = LIVESTREAM_COMMANDS.get(payload["command"])
     if command is None or command.name != "prepare_to_live_stream":
         raise PermissionError("proposal command is not in the current single-send allowlist")
     decoded = decode_duml_frame(raw)
     validate_command_frame(command, decoded)
     return payload, raw
-

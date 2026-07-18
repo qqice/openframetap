@@ -502,6 +502,13 @@ def main(argv: list[str] | None = None) -> int:
             evidence_sha = args.server_evidence_sha256.lower()
             if len(evidence_sha) != 64 or any(ch not in "0123456789abcdef" for ch in evidence_sha):
                 raise SystemExit("--server-evidence-sha256 must be 64 lowercase hex characters")
+            pairing_digest = args.pairing_evidence.rsplit(":", 1)[-1].lower()
+            if len(pairing_digest) != 64 or any(
+                ch not in "0123456789abcdef" for ch in pairing_digest
+            ):
+                raise SystemExit(
+                    "--pairing-evidence must end with a 64-character lowercase SHA-256"
+                )
             workflow = Pocket3RtmpWorkflow.load(args.state_file)
             if workflow.phase != "preflight":
                 print(f"REFUSED: prepare proposal requires preflight state, found {workflow.phase}")
@@ -516,6 +523,8 @@ def main(argv: list[str] | None = None) -> int:
                 address=args.address,
                 private_root=args.private_root,
                 sanitized_root=args.sanitized_root,
+                server_evidence_sha256=evidence_sha,
+                pairing_evidence=args.pairing_evidence,
             )
             workflow.transition(
                 "prepare_proposed",
