@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import binascii
+from bisect import bisect_right
 import csv
 from datetime import datetime, timezone
 import hashlib
@@ -19,6 +20,7 @@ from openframetap.analysis.correlation import (
     first_difference,
     median_ratio,
     pearson_correlation,
+    population_standard_deviation,
     spearman_correlation,
 )
 from openframetap.analysis.field_candidates import (
@@ -133,9 +135,19 @@ def _series_pairs(
     *,
     window_ms: float,
     lag_ms: float = 0,
+    left_observations=None,
+    right_observations=None,
 ) -> tuple[list[float], list[float], dict[str, Any]]:
-    left = observations_for_candidate(frames, left_candidate)
-    right = observations_for_candidate(frames, right_candidate)
+    left = (
+        left_observations
+        if left_observations is not None
+        else observations_for_candidate(frames, left_candidate)
+    )
+    right = (
+        right_observations
+        if right_observations is not None
+        else observations_for_candidate(frames, right_candidate)
+    )
     alignment = nearest_neighbor_alignment(
         left,
         right,
@@ -167,13 +179,58 @@ def _pair_analysis(
         }
     correlations = []
     primary_window = float(windows_ms[min(1, len(windows_ms) - 1)])
+    observation_cache = {
+        _candidate_id(candidate): observations_for_candidate(frames, candidate)
+        for candidate in [*left_candidates, *right_candidates]
+    }
+    value_cache = {
+        candidate_id: [float(observation.value) for observation in observations]
+        for candidate_id, observations in observation_cache.items()
+    }
+    pair_alignment_cache: dict[tuple[int, int, float], dict[str, Any]] = {}
+
+    def cached_alignment(
+        left_candidate: dict[str, Any],
+        right_candidate: dict[str, Any],
+        lag_ms: float,
+    ) -> dict[str, Any]:
+        key = (
+            int(left_candidate["payload_length"]),
+            int(right_candidate["payload_length"]),
+            float(lag_ms),
+        )
+        if key not in pair_alignment_cache:
+            left_observations = observation_cache[_candidate_id(left_candidate)]
+            right_observations = observation_cache[_candidate_id(right_candidate)]
+            pair_alignment_cache[key] = nearest_neighbor_alignment(
+                left_observations,
+                right_observations,
+                max_window_ms=primary_window,
+                source_time=lambda item: item.monotonic_ns + int(lag_ms * 1_000_000),
+                target_time=lambda item: item.monotonic_ns,
+            )
+        return pair_alignment_cache[key]
+
+    def aligned_values(
+        left_candidate: dict[str, Any],
+        right_candidate: dict[str, Any],
+        lag_ms: float,
+    ) -> tuple[list[float], list[float], dict[str, Any]]:
+        alignment = cached_alignment(left_candidate, right_candidate, lag_ms)
+        left_values = value_cache[_candidate_id(left_candidate)]
+        right_values = value_cache[_candidate_id(right_candidate)]
+        return (
+            [left_values[item["source_index"]] for item in alignment["matches"]],
+            [right_values[item["target_index"]] for item in alignment["matches"]],
+            alignment,
+        )
+
     for left_candidate in left_candidates:
         for right_candidate in right_candidates:
-            left_values, right_values, alignment = _series_pairs(
-                frames,
+            left_values, right_values, alignment = aligned_values(
                 left_candidate,
                 right_candidate,
-                window_ms=primary_window,
+                0.0,
             )
             if len(left_values) < 3:
                 continue
@@ -186,8 +243,12 @@ def _pair_analysis(
             diff_corr = pearson_correlation(left_diff, right_diff) if len(left_diff) >= 2 else None
             differences = [a - b for a, b in zip(left_values, right_values)]
             sums = [a + b for a, b in zip(left_values, right_values)]
-            left_diff_std = statistics.pstdev(left_diff) if len(left_diff) >= 2 else None
-            right_diff_std = statistics.pstdev(right_diff) if len(right_diff) >= 2 else None
+            left_diff_std = (
+                population_standard_deviation(left_diff) if len(left_diff) >= 2 else None
+            )
+            right_diff_std = (
+                population_standard_deviation(right_diff) if len(right_diff) >= 2 else None
+            )
             low_pass_candidate = None
             if left_diff_std is not None and right_diff_std is not None:
                 if left_diff_std < right_diff_std * 0.75:
@@ -196,12 +257,10 @@ def _pair_analysis(
                     low_pass_candidate = "right_may_be_low_pass_of_left"
             best_lag = {"lag_ms": 0.0, "pearson": pearson}
             for lag in range(-250, 251, 50):
-                lag_left, lag_right, _ = _series_pairs(
-                    frames,
+                lag_left, lag_right, _ = aligned_values(
                     left_candidate,
                     right_candidate,
-                    window_ms=primary_window,
-                    lag_ms=lag,
+                    float(lag),
                 )
                 value = pearson_correlation(lag_left, lag_right) if len(lag_left) >= 3 else None
                 if value is not None and (
@@ -224,9 +283,11 @@ def _pair_analysis(
                     "spearman": spearman,
                     "first_difference_pearson": diff_corr,
                     "left_minus_right_mean": statistics.fmean(differences),
-                    "left_minus_right_standard_deviation": statistics.pstdev(differences),
+                    "left_minus_right_standard_deviation": population_standard_deviation(
+                        differences
+                    ),
                     "left_plus_right_mean": statistics.fmean(sums),
-                    "left_plus_right_standard_deviation": statistics.pstdev(sums),
+                    "left_plus_right_standard_deviation": population_standard_deviation(sums),
                     "median_left_over_right": ratio,
                     "low_pass_candidate": low_pass_candidate,
                     "best_lag": best_lag,
@@ -373,21 +434,91 @@ def _axis_candidates(candidates: Sequence[dict[str, Any]]) -> dict[str, dict[str
                 .get("score", 0.0)
             )
             if score > 0:
-                ranked.append((score, candidate))
+                axis_metrics = (
+                    candidate.get("event_correlations", {})
+                    .get("axis_scores", {})
+                    .get(axis, {})
+                )
+                signal_to_noise = float(
+                    axis_metrics.get("minimum_signal_to_static_noise", 0.0)
+                )
+                # Prefer the cleanest primitive field when the bounded score
+                # saturates. This avoids choosing an overlapping int32 merely
+                # because it appears first in the enumerator.
+                ranked.append(
+                    (
+                        score,
+                        signal_to_noise,
+                        -int(candidate["width"]),
+                        candidate["encoding"].endswith("_le"),
+                        candidate,
+                    )
+                )
         if ranked:
-            score, candidate = max(ranked, key=lambda pair: pair[0])
+            score, signal_to_noise, _, _, candidate = max(
+                ranked, key=lambda item: item[:-1]
+            )
             confidence = "medium" if score >= 0.8 else "low"
             result[axis] = {
                 "candidate": candidate,
                 "candidate_id": _candidate_id(candidate),
                 "score": score,
+                "minimum_signal_to_static_noise": signal_to_noise,
                 "confidence": confidence,
                 "scale_status": "fixed_scale_candidates_only_not_selected_as_semantics",
             }
     return result
 
 
-def _message_observations(frames: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def _payload_transitions(
+    frames: Sequence[dict[str, Any]], events: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Describe payload changes against the preceding ROCK monotonic event."""
+
+    ordered_events = sorted(
+        (
+            event
+            for event in events
+            if "monotonic_ns" in event and event.get("phase") != "session"
+        ),
+        key=lambda event: int(event["monotonic_ns"]),
+    )
+    event_times = [int(event["monotonic_ns"]) for event in ordered_events]
+    transitions = []
+    previous = None
+    for frame in sorted(frames, key=lambda record: int(record["monotonic_ns"])):
+        payload = str(frame.get("payload_hex", ""))
+        if previous is None:
+            previous = payload
+            continue
+        if payload == previous:
+            continue
+        timestamp = int(frame["monotonic_ns"])
+        event_index = bisect_right(event_times, timestamp) - 1
+        preceding = ordered_events[event_index] if event_index >= 0 else None
+        transitions.append(
+            {
+                "monotonic_ns": timestamp,
+                "wall_time_utc": frame.get("wall_time_utc"),
+                "from_payload_hex": previous,
+                "to_payload_hex": payload,
+                "nearest_preceding_event": (
+                    preceding.get("event_name") if preceding else None
+                ),
+                "delta_from_event_ms": (
+                    (timestamp - int(preceding["monotonic_ns"])) / 1_000_000
+                    if preceding
+                    else None
+                ),
+            }
+        )
+        previous = payload
+    return transitions
+
+
+def _message_observations(
+    frames: Sequence[dict[str, Any]], events: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
     result = {}
     for command in ("04/05", "04/27", "04/1C", "04/38", "0D/02", "00/81", "02/80"):
         selected = [frame for frame in frames if _frame_command(frame) == command]
@@ -398,7 +529,7 @@ def _message_observations(frames: Sequence[dict[str, Any]]) -> dict[str, Any]:
         for payload in payloads:
             length = str(len(payload) // 2)
             lengths[length] = lengths.get(length, 0) + 1
-        result[command] = {
+        observation = {
             "count": len(selected),
             "payload_lengths": lengths,
             "unique_payload_count": len(set(payloads)),
@@ -406,6 +537,14 @@ def _message_observations(frames: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "first_payload_hex": payloads[0] if payloads else None,
             "last_payload_hex": payloads[-1] if payloads else None,
         }
+        unique_payloads = set(payloads)
+        if len(unique_payloads) <= 16:
+            observation["payload_value_counts"] = {
+                payload: payloads.count(payload) for payload in sorted(unique_payloads)
+            }
+        if command == "04/27":
+            observation["payload_transitions"] = _payload_transitions(selected, events)
+        result[command] = observation
     return result
 
 
@@ -717,6 +856,19 @@ def _write_markdown_report(
             )
         else:
             lines.append("【待验证假设】No sufficiently sampled 04/05 ↔ 04/27 numeric pair was available.")
+    transitions_04_27 = message_observations.get("04/27", {}).get(
+        "payload_transitions", []
+    )
+    if transitions_04_27:
+        lines.append(
+            "【统计观察】04/27 payload transitions against the nearest preceding "
+            f"manual event: `{json.dumps(transitions_04_27, sort_keys=True)}`."
+        )
+        lines.append(
+            "【捕获推断】04/27 behaves as a sparse state/threshold candidate in this "
+            "session, not as a continuously varying three-axis value; its exact "
+            "meaning remains unresolved."
+        )
     lines.extend(
         [
             "",
@@ -761,7 +913,7 @@ def analyze_experiment(
     events = _read_jsonl(experiment_dir / "events.jsonl")
     candidates = generate_field_candidates(frames, events)
     pair_analysis = _pair_analysis(frames, candidates, windows_ms)
-    message_observations = _message_observations(frames)
+    message_observations = _message_observations(frames, events)
     event_alignment = _event_alignment(frames, events, windows_ms)
     battery = _battery_comparison(
         frames, events, candidates, window_ms=battery_window_ms

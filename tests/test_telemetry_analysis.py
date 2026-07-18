@@ -8,8 +8,10 @@ import pytest
 
 from openframetap.analysis.alignment import nearest_neighbor_alignment
 from openframetap.analysis.correlation import (
+    event_field_metrics,
     first_difference,
     pearson_correlation,
+    population_standard_deviation,
     spearman_correlation,
     wraparound_candidate,
 )
@@ -194,6 +196,20 @@ def test_static_variance_and_action_direction_consistency(tmp_path: Path) -> Non
     assert yaw["event_correlations"]["axis_scores"]["yaw"]["opposite_direction"] is True
 
 
+def test_static_variance_is_within_interval_not_between_poses() -> None:
+    second = 1_000_000_000
+    times = [0, second, 2 * second, 10 * second, 11 * second, 12 * second]
+    values = [0.0, 0.0, 0.0, 100.0, 100.0, 100.0]
+    events = [
+        {"monotonic_ns": 0, "event_name": "baseline_static_start", "phase": "baseline"},
+        {"monotonic_ns": 2 * second, "event_name": "end_current_action", "phase": "end"},
+        {"monotonic_ns": 10 * second, "event_name": "stable_interval", "phase": "stable"},
+        {"monotonic_ns": 12 * second, "event_name": "end_current_action", "phase": "end"},
+    ]
+    metrics = event_field_metrics(times, values, events)
+    assert metrics["static_variance"] == 0.0
+
+
 def test_alignment_windows_and_correlations() -> None:
     source = [{"monotonic_ns": 0}, {"monotonic_ns": 100_000_000}]
     target = [{"monotonic_ns": 40_000_000}, {"monotonic_ns": 170_000_000}]
@@ -204,6 +220,7 @@ def test_alignment_windows_and_correlations() -> None:
     assert pearson_correlation([1, 2, 3], [2, 4, 6]) == pytest.approx(1.0)
     assert spearman_correlation([1, 3, 2], [10, 30, 20]) == pytest.approx(1.0)
     assert first_difference([0, 1, 3], [0, 1_000_000_000, 2_000_000_000]) == [1, 2]
+    assert population_standard_deviation([1, 2, 3]) == pytest.approx((2 / 3) ** 0.5)
 
 
 def test_wraparound_candidate_detection() -> None:
@@ -231,7 +248,11 @@ def test_complete_analysis_keeps_raw_files_immutable(tmp_path: Path) -> None:
     assert result["checksum_before"]["all_match"]
     assert result["checksum_after"]["all_match"]
     assert set(result["axis_candidates"]) == {"yaw", "pitch", "roll"}
+    assert result["axis_candidates"]["roll"]["minimum_signal_to_static_noise"] > 0
     assert result["battery_comparison"]["status"] == "screen_correlated_but_no_transition_observed"
+    observations = result["message_observations"]
+    assert observations["04/27"]["payload_value_counts"]
+    assert observations["04/27"]["payload_transitions"]
     analysis = experiment / "analysis"
     for name in (
         "field-candidates.csv",

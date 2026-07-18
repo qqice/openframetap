@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from bisect import bisect_left, bisect_right
 import math
 import statistics
 from typing import Any, Iterable, Sequence
@@ -16,6 +17,19 @@ ACTION_EVENTS = {
     "roll_clockwise_start": "roll",
     "roll_counter_clockwise_start": "roll",
 }
+
+
+def population_variance(values: Sequence[float]) -> float:
+    """Fast floating-point population variance for high-volume candidate scans."""
+
+    if not values:
+        raise ValueError("population variance requires at least one value")
+    mean = math.fsum(values) / len(values)
+    return math.fsum((value - mean) ** 2 for value in values) / len(values)
+
+
+def population_standard_deviation(values: Sequence[float]) -> float:
+    return math.sqrt(population_variance(values))
 
 
 def pearson_correlation(left: Sequence[float], right: Sequence[float]) -> float | None:
@@ -145,7 +159,11 @@ def build_action_intervals(events: Sequence[dict[str, Any]], end_ns: int) -> lis
 
 
 def event_field_metrics(
-    times_ns: Sequence[int], values: Sequence[float], events: Sequence[dict[str, Any]]
+    times_ns: Sequence[int],
+    values: Sequence[float],
+    events: Sequence[dict[str, Any]],
+    *,
+    prepared_windows: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not times_ns or not events:
         return {
@@ -154,27 +172,21 @@ def event_field_metrics(
             "static_variance": None,
             "action_interval_count": 0,
         }
-    intervals = build_action_intervals(events, max(times_ns))
+    prepared = prepared_windows or prepare_event_windows(times_ns, events)
     effects: defaultdict[str, list[float]] = defaultdict(list)
-    static_values: list[float] = []
-    for interval in intervals:
-        indexes = [
-            index
-            for index, timestamp in enumerate(times_ns)
-            if interval["start_ns"] <= timestamp <= interval["end_ns"]
-        ]
+    static_variances = [
+        population_variance([values[index] for index in indexes])
+        for indexes in prepared["static_intervals"]
+        if len(indexes) >= 2
+    ]
+    for interval in prepared["intervals"]:
+        indexes = interval["indexes"]
         if not indexes:
             continue
         name = interval["event_name"]
         selected = [values[index] for index in indexes]
-        if name in {"baseline_static_start", "stable_interval"}:
-            static_values.extend(selected)
         if name in ACTION_EVENTS:
-            before = [
-                values[index]
-                for index, timestamp in enumerate(times_ns)
-                if interval["start_ns"] - 1_000_000_000 <= timestamp < interval["start_ns"]
-            ]
+            before = [values[index] for index in interval["before_indexes"]]
             baseline = statistics.median(before) if before else selected[0]
             effects[name].append(statistics.median(selected) - baseline)
 
@@ -186,7 +198,7 @@ def event_field_metrics(
         }
         for name, deltas in sorted(effects.items())
     }
-    static_variance = statistics.pvariance(static_values) if len(static_values) >= 2 else None
+    static_variance = math.fsum(static_variances) / len(static_variances) if static_variances else None
     static_std = math.sqrt(static_variance) if static_variance is not None else 0.0
     pairs = {
         "yaw": ("yaw_left_start", "yaw_right_start"),
@@ -214,7 +226,42 @@ def event_field_metrics(
         "action_deltas": action_deltas,
         "axis_scores": axis_scores,
         "static_variance": static_variance,
-        "action_interval_count": len(intervals),
+        "action_interval_count": len(prepared["intervals"]),
+    }
+
+
+def prepare_event_windows(
+    times_ns: Sequence[int], events: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """Precompute time-to-index windows once for every field in one payload group."""
+
+    if not times_ns or not events:
+        return {"intervals": [], "static_indexes": [], "static_intervals": []}
+    intervals = build_action_intervals(events, max(times_ns))
+    prepared = []
+    static_indexes: set[int] = set()
+    static_intervals: list[list[int]] = []
+    for interval in intervals:
+        start = bisect_left(times_ns, interval["start_ns"])
+        end = bisect_right(times_ns, interval["end_ns"])
+        indexes = list(range(start, end))
+        before_start = bisect_left(times_ns, interval["start_ns"] - 1_000_000_000)
+        before_end = bisect_left(times_ns, interval["start_ns"])
+        before_indexes = list(range(before_start, before_end))
+        if interval["event_name"] in {"baseline_static_start", "stable_interval"}:
+            static_indexes.update(indexes)
+            static_intervals.append(indexes)
+        prepared.append(
+            {
+                **interval,
+                "indexes": indexes,
+                "before_indexes": before_indexes,
+            }
+        )
+    return {
+        "intervals": prepared,
+        "static_indexes": sorted(static_indexes),
+        "static_intervals": static_intervals,
     }
 
 

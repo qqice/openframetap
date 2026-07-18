@@ -11,6 +11,8 @@ from typing import Any, Iterable, Sequence
 from openframetap.analysis.correlation import (
     event_field_metrics,
     monotonic_segment_count,
+    population_standard_deviation,
+    prepare_event_windows,
     wraparound_candidate,
     zero_crossing_count,
 )
@@ -110,8 +112,10 @@ def _numeric_statistics(
     return {
         "minimum": min(values),
         "maximum": max(values),
-        "mean": statistics.fmean(values),
-        "standard_deviation": statistics.pstdev(values) if len(values) >= 2 else 0.0,
+        "mean": math.fsum(values) / len(values),
+        "standard_deviation": population_standard_deviation(values)
+        if len(values) >= 2
+        else 0.0,
         "unique_count": len(set(values)),
         "update_rate": ((len(values) - 1) / duration_seconds if duration_seconds > 0 else 0.0),
         "zero_crossings": zero_crossing_count(values),
@@ -125,7 +129,11 @@ def _numeric_statistics(
 
 def _scale_candidates(values: Sequence[float]) -> list[dict[str, float]]:
     result = []
+    seen: set[float] = set()
     for scale in ANGLE_SCALES:
+        if scale in seen:
+            continue
+        seen.add(scale)
         scaled_min = min(values) * scale
         scaled_max = max(values) * scale
         if max(abs(scaled_min), abs(scaled_max)) <= 720 and scaled_max - scaled_min >= 0.01:
@@ -188,6 +196,7 @@ def generate_field_candidates(
     for (command, payload_length), group in sorted(groups.items()):
         group.sort(key=lambda sample: sample.monotonic_ns)
         times_ns = [sample.monotonic_ns for sample in group]
+        prepared_windows = prepare_event_windows(times_ns, events)
         for offset, width, encoding in _candidate_layouts(payload_length):
             values = [decode_field(sample.payload, offset, width, encoding) for sample in group]
             if encoding.startswith("float") and any(
@@ -196,7 +205,9 @@ def generate_field_candidates(
                 continue
             numeric = [float(value) for value in values]
             stats = _numeric_statistics(numeric, times_ns, width=width, encoding=encoding)
-            metrics = event_field_metrics(times_ns, numeric, events)
+            metrics = event_field_metrics(
+                times_ns, numeric, events, prepared_windows=prepared_windows
+            )
             candidates.append(
                 {
                     "command": command,
@@ -224,7 +235,9 @@ def generate_field_candidates(
                     continue
                 encoding = f"bit{bit}"
                 stats = _numeric_statistics(values, times_ns, width=1, encoding=encoding)
-                metrics = event_field_metrics(times_ns, values, events)
+                metrics = event_field_metrics(
+                    times_ns, values, events, prepared_windows=prepared_windows
+                )
                 candidates.append(
                     {
                         "command": command,
