@@ -165,3 +165,31 @@ def test_pocket_listener_failure_cleans_up_btmon(tmp_path: Path) -> None:
     assert start_file.exists()
     assert stop_file.read_text(encoding="utf-8") == "stopped"
     assert "ARTIFACT_DIR=pocket3-listen-" in result.stdout
+
+
+def test_manual_frame_confirmation_mismatch_never_calls_ssh(tmp_path: Path) -> None:
+    frame = tmp_path / "frame.bin"
+    frame.write_bytes(bytes.fromhex("550e046604026b1300041c48e5e2"))
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [
+            bash_path(),
+            "scripts/remote.sh",
+            "pocket3-send-frame",
+            shell_path(frame),
+            "set_pairing_pin",
+            "1",
+        ],
+        cwd=ROOT,
+        env=env,
+        input="wrong-confirmation\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert "no deployment or BLE connection was attempted" in result.stderr
+    assert "Exit status: 37" not in result.stdout

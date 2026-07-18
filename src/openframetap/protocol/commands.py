@@ -144,3 +144,33 @@ def assert_send_allowed(command: CommandDefinition, authorization: SendAuthoriza
         raise CommandRejected(
             f"authorization {authorization.approval_reference!r} does not allow {command.name}"
         )
+
+
+def validate_command_frame(command: CommandDefinition, frame) -> None:
+    """Validate phase-specific flags and payload before a transport is opened."""
+
+    if frame.encryption != 0:
+        raise CommandRejected("encrypted command candidates are not allowed in this phase")
+    if command.ack_required != bool(frame.flags & 0x40):
+        raise CommandRejected(f"{command.name} ACK flag does not match its definition")
+    if command.name == "set_pairing_pin":
+        if frame.flags != 0x40:
+            raise CommandRejected("set_pairing_pin must use request flags 0x40")
+        payload = frame.payload
+        if not payload or payload[0] != 15 or len(payload) < 18:
+            raise CommandRejected("set_pairing_pin identifier packing is invalid")
+        identifier_end = 1 + payload[0]
+        if payload[1:identifier_end] != b"001749319286102":
+            raise CommandRejected("set_pairing_pin identifier is not the reviewed Pocket 3 value")
+        pin_length = payload[identifier_end]
+        pin = payload[identifier_end + 1 :]
+        if pin_length != len(pin) or not 4 <= pin_length <= 8:
+            raise CommandRejected("set_pairing_pin PIN packing or length is invalid")
+        if not all(0x20 <= value < 0x7F for value in pin):
+            raise CommandRejected("set_pairing_pin PIN must be printable ASCII")
+    elif command.name == "pairing_stage1_ack":
+        if frame.flags != 0xC0 or frame.payload != b"\x00":
+            raise CommandRejected("pairing_stage1_ack must be C00746 with payload 00")
+    elif command.name == "pairing_stage2":
+        if frame.flags != 0x40 or frame.payload != b"11\x00\x00\x00":
+            raise CommandRejected("pairing_stage2 must be 400032 with payload 3131000000")

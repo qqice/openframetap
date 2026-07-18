@@ -11,8 +11,8 @@ class PairingState(str, Enum):
     SUBSCRIBED = "subscribed"
     WAITING_STATUS = "waiting_status"
     WAITING_DEVICE_CONFIRMATION = "waiting_device_confirmation"
-    WAITING_STAGE1_RESPONSE = "waiting_stage1_response"
-    WAITING_STAGE2_RESPONSE = "waiting_stage2_response"
+    READY_STAGE1_SEND = "ready_stage1_send"
+    READY_STAGE2_SEND = "ready_stage2_send"
     PAIRED = "paired"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -53,14 +53,14 @@ class PairingStateMachine:
         self.attempts += 1
         self.last_error = None
         self.state = PairingState.WAITING_STATUS
-        return PairingEvent("send_set_pairing_pin", f"authorized attempt {self.attempts}")
+        return PairingEvent("propose_set_pairing_pin", f"confirmed attempt {self.attempts}")
 
     def pairing_status(self, payload: bytes) -> PairingEvent:
         if self.state is not PairingState.WAITING_STATUS:
             if self.state in {
                 PairingState.WAITING_DEVICE_CONFIRMATION,
-                PairingState.WAITING_STAGE1_RESPONSE,
-                PairingState.WAITING_STAGE2_RESPONSE,
+                PairingState.READY_STAGE1_SEND,
+                PairingState.READY_STAGE2_SEND,
                 PairingState.PAIRED,
             }:
                 return PairingEvent("none", "duplicate pairing-status response ignored")
@@ -80,24 +80,24 @@ class PairingStateMachine:
             return self._fail(f"device approval received in {self.state.value}")
         if payload != b"\x01":
             return self._fail(f"unexpected approval payload: {payload.hex()}")
-        self.state = PairingState.WAITING_STAGE1_RESPONSE
-        return PairingEvent("send_pairing_stage1", "Pocket approval captured")
+        self.state = PairingState.READY_STAGE1_SEND
+        return PairingEvent("propose_pairing_stage1", "Pocket approval captured")
 
-    def stage1_response(self, payload: bytes) -> PairingEvent:
-        if self.state is not PairingState.WAITING_STAGE1_RESPONSE:
-            return self._fail(f"stage1 response received in {self.state.value}")
-        if payload not in {b"", b"\x00"}:
-            return self._fail(f"unexpected stage1 payload: {payload.hex()}")
-        self.state = PairingState.WAITING_STAGE2_RESPONSE
-        return PairingEvent("send_pairing_stage2", "stage1 acknowledged")
+    def stage1_sent(self) -> PairingEvent:
+        """The captured C00746 frame is itself the ACK to device approval."""
 
-    def stage2_response(self, payload: bytes) -> PairingEvent:
-        if self.state is not PairingState.WAITING_STAGE2_RESPONSE:
-            return self._fail(f"stage2 response received in {self.state.value}")
-        if payload and payload[0] not in {0, 1}:
-            return self._fail(f"unexpected stage2 payload: {payload.hex()}")
+        if self.state is not PairingState.READY_STAGE1_SEND:
+            return self._fail(f"stage1 sent in {self.state.value}")
+        self.state = PairingState.READY_STAGE2_SEND
+        return PairingEvent("propose_pairing_stage2", "manually executed stage1 recorded")
+
+    def stage2_sent(self) -> PairingEvent:
+        """Complete the captured Mimo pairing sequence after explicit approval."""
+
+        if self.state is not PairingState.READY_STAGE2_SEND:
+            return self._fail(f"stage2 sent in {self.state.value}")
         self.state = PairingState.PAIRED
-        return PairingEvent("complete", "pairing stage2 accepted")
+        return PairingEvent("complete", "Pocket approval observed and captured finalization sent")
 
     def timeout(self) -> PairingEvent:
         return self._fail(f"timeout after {self.timeout_seconds:g}s")

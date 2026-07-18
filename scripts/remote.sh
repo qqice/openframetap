@@ -117,6 +117,7 @@ Usage:
   ./scripts/remote.sh pocket3-pair-status
   ./scripts/remote.sh pocket3-pair
   ./scripts/remote.sh pocket3-telemetry [seconds]
+  ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds]
   ./scripts/remote.sh setup-python
 EOF
 }
@@ -226,6 +227,43 @@ bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
     status=$?
     stem="$(extract_stem ARTIFACT_DIR)"
     [[ -n "$stem" ]] || { echo '[openframetap] Missing telemetry artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
+    exit "$status"
+    ;;
+  pocket3-send-frame)
+    [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
+    frame_path="$2"
+    command_name="$3"
+    seconds="${4:-20}"
+    [[ -f "$frame_path" ]] || { echo "frame file not found: $frame_path" >&2; exit 2; }
+    [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'seconds must be a positive integer' >&2; exit 2; }
+    case "$command_name" in
+      set_pairing_pin|pairing_stage1_ack|pairing_stage2) ;;
+      *) echo "command is not in the pairing allowlist: $command_name" >&2; exit 2 ;;
+    esac
+    frame_hex="$(od -An -v -tx1 "$frame_path" | tr -d ' \n')"
+    frame_sha256="$(sha256sum "$frame_path" | awk '{print tolower($1)}')"
+    [[ -n "$frame_hex" ]] || { echo 'frame file is empty' >&2; exit 2; }
+    print_target
+    printf '[openframetap] MANUAL SINGLE-FRAME WRITE\n'
+    printf '[openframetap] Pocket address: %s\n' "$POCKET3_ADDRESS"
+    printf '[openframetap] Command: %s\n' "$command_name"
+    printf '[openframetap] Frame hex: %s\n' "$frame_hex"
+    printf '[openframetap] SHA-256: %s\n' "$frame_sha256"
+    printf '[openframetap] No automatic follow-up frame will be sent.\n'
+    printf '[openframetap] Type the full SHA-256 to write this one frame: '
+    IFS= read -r typed_sha256
+    if [[ "${typed_sha256,,}" != "$frame_sha256" ]]; then
+      echo '[openframetap] Confirmation mismatch; no deployment or BLE connection was attempted.' >&2
+      exit 4
+    fi
+    deploy || exit $?
+    run_remote manual-frame "set -u
+cd $REMOTE_DIR
+bash scripts/capture-pocket3.sh manual-frame '$POCKET3_ADDRESS' '$seconds' '$frame_hex' '$command_name' '$frame_sha256'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR)"
+    [[ -n "$stem" ]] || { echo '[openframetap] Missing manual-frame artifact marker' >&2; exit 3; }
     pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
     exit "$status"
     ;;

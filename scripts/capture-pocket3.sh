@@ -6,8 +6,11 @@ cd "$ROOT_DIR"
 operation="${1:-listen}"
 address="${2:-}"
 seconds="${3:-60}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" ]] || {
-  echo 'operation must be listen, telemetry, or pair-status' >&2
+frame_hex="${4:-}"
+command_name="${5:-}"
+confirmed_sha256="${6:-}"
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" ]] || {
+  echo 'operation must be listen, telemetry, pair-status, or manual-frame' >&2
   exit 2
 }
 [[ -n "$address" ]] || { echo 'BLE address is required' >&2; exit 2; }
@@ -18,6 +21,7 @@ case "$operation" in
   listen) prefix="pocket3-listen" ;;
   telemetry) prefix="pocket3-telemetry" ;;
   pair-status) prefix="pocket3-pair-status" ;;
+  manual-frame) prefix="pocket3-manual-frame" ;;
 esac
 stem="$prefix-$stamp"
 output_dir="artifacts/$stem"
@@ -112,6 +116,15 @@ case "$operation" in
   pair-status)
     "$PYTHON_BIN" -m openframetap pocket3 pair status "$address" --seconds "$seconds" --output-dir "$output_dir" \
       2>&1 | tee "$session_output"
+    ;;
+  manual-frame)
+    [[ -n "$frame_hex" && -n "$command_name" && -n "$confirmed_sha256" ]] || {
+      echo 'manual-frame requires hex, command name, and confirmed SHA-256' >&2
+      exit 2
+    }
+    OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" -m openframetap ble manual-write "$address" \
+      --hex "$frame_hex" --command "$command_name" --confirmed-sha256 "$confirmed_sha256" \
+      --seconds "$seconds" --output-dir "$output_dir" 2>&1 | tee "$session_output"
     ;;
 esac
 session_status=${PIPESTATUS[0]}

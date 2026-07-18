@@ -12,6 +12,7 @@ from openframetap.protocol.commands import (
     CommandRejected,
     SendAuthorization,
     assert_send_allowed,
+    validate_command_frame,
 )
 from openframetap.protocol.crc import crc8_dji, crc16_dji
 from openframetap.protocol.duml import DumlDecodeError, decode_duml_frame, encode_duml_frame
@@ -133,6 +134,40 @@ def test_pairing_authorization_is_narrow() -> None:
     assert_send_allowed(PAIRING_COMMANDS["set_pairing_pin"], authorization)
     with pytest.raises(CommandRejected, match="denied"):
         assert_send_allowed(COMMANDS_BY_NAME["gimbal_speed_control"], authorization)
+
+
+def test_pairing_payload_schema_is_enforced() -> None:
+    command = PAIRING_COMMANDS["set_pairing_pin"]
+    malformed = decode_duml_frame(
+        encode_duml_frame(
+            sender=command.sender,
+            receiver=command.receiver,
+            sequence=1,
+            flags=0x40,
+            cmd_set=command.cmd_set,
+            cmd_id=command.cmd_id,
+            payload=b"\x04guess\x04love",
+        )
+    )
+    with pytest.raises(CommandRejected, match="identifier"):
+        validate_command_frame(command, malformed)
+
+
+def test_stage2_payload_must_match_reviewed_capture() -> None:
+    command = PAIRING_COMMANDS["pairing_stage2"]
+    malformed = decode_duml_frame(
+        encode_duml_frame(
+            sender=command.sender,
+            receiver=command.receiver,
+            sequence=0x74AA,
+            flags=0x40,
+            cmd_set=command.cmd_set,
+            cmd_id=command.cmd_id,
+            payload=b"guess",
+        )
+    )
+    with pytest.raises(CommandRejected, match="3131000000"):
+        validate_command_frame(command, malformed)
 
 
 @pytest.mark.parametrize(

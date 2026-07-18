@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from openframetap.devices.pocket3 import POCKET3_PROFILE, build_set_pairing_pin_frame
+from openframetap.cli import main as cli_main
 from openframetap.protocol.commands import PAIRING_COMMANDS, CommandRejected
 from openframetap.protocol.duml import decode_duml_frame, encode_duml_frame
 from openframetap.telemetry.decoder import decode_telemetry
@@ -18,6 +19,7 @@ from openframetap.transport.bluez_ble import (
     NotificationRecord,
     classify_ble_error,
 )
+from openframetap.session import manual_send_pocket3_frame
 
 LIVE_FIXTURE = Path(__file__).parent / "fixtures" / "live_fff4_frames.json"
 
@@ -90,6 +92,112 @@ def test_requested_disconnect_is_not_an_interruption(monkeypatch) -> None:
     callback = [event for event in events if event["event"] == "disconnected_callback"]
     assert len(callback) == 1
     assert callback[0]["intentional"] is True
+
+
+def test_manual_frame_rejects_wrong_human_confirmation_before_transport(tmp_path) -> None:
+    def forbidden_factory(*_args, **_kwargs):
+        raise AssertionError("transport must not be constructed")
+
+    with pytest.raises(PermissionError, match="SHA-256"):
+        asyncio.run(
+            manual_send_pocket3_frame(
+                "fixture",
+                raw=build_set_pairing_pin_frame(),
+                command_name="set_pairing_pin",
+                confirmed_sha256="0" * 64,
+                seconds=1,
+                output_dir=tmp_path,
+                transport_factory=forbidden_factory,
+            )
+        )
+
+
+def test_manual_write_cli_refuses_without_local_human_gate(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("OPENFRAMETAP_USER_INITIATED", raising=False)
+    raw = build_set_pairing_pin_frame()
+    import hashlib
+
+    status = cli_main(
+        [
+            "ble",
+            "manual-write",
+            "fixture",
+            "--hex",
+            raw.hex(),
+            "--command",
+            "set_pairing_pin",
+            "--confirmed-sha256",
+            hashlib.sha256(raw).hexdigest(),
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    assert status == 4
+    assert not any(tmp_path.iterdir())
+
+
+def test_manual_mode_sends_exactly_one_confirmed_frame_and_no_followup(tmp_path) -> None:
+    sent = []
+    ready_frame = encode_duml_frame(
+        sender=1,
+        receiver=2,
+        sequence=1,
+        flags=0,
+        cmd_set=2,
+        cmd_id=0x80,
+        payload=b"ready",
+    )
+
+    class FakeTransport:
+        def __init__(self, _address, _profile, *, event_handler, **_kwargs) -> None:
+            self.event_handler = event_handler
+            self.is_connected = False
+            self.active_disconnect_count = 0
+            self.setup_disconnect_count = 0
+            self.disconnect_count = 0
+
+        async def connect(self) -> None:
+            self.is_connected = True
+
+        async def subscribe(self, handler) -> None:
+            await handler(
+                NotificationRecord(
+                    wall_timestamp="2026-07-18T00:00:00+00:00",
+                    monotonic_ns=1,
+                    characteristic_uuid=POCKET3_PROFILE.notification_uuid,
+                    characteristic_handle=44,
+                    data=ready_frame,
+                )
+            )
+
+        async def send_frame(self, raw, *, command, authorization) -> None:
+            sent.append((bytes(raw), command.name, authorization.approval_reference))
+
+        async def disconnect(self) -> None:
+            self.is_connected = False
+
+    raw = build_set_pairing_pin_frame()
+    import hashlib
+
+    digest = hashlib.sha256(raw).hexdigest()
+    summary, ok = asyncio.run(
+        manual_send_pocket3_frame(
+            "fixture",
+            raw=raw,
+            command_name="set_pairing_pin",
+            confirmed_sha256=digest,
+            seconds=0.001,
+            output_dir=tmp_path,
+            transport_factory=FakeTransport,
+        )
+    )
+    assert ok
+    assert sent == [(raw, "set_pairing_pin", f"manual-frame-sha256:{digest}")]
+    assert summary["writes_attempted"] == 1
+    assert summary["automatic_follow_up_frames"] == 0
+    transmission = json.loads((tmp_path / "transmission.json").read_text(encoding="utf-8"))
+    assert transmission["status"] == "single_frame_written"
+    assert transmission["follow_up_frames_sent"] == 0
 
 
 def test_battery_decoder_keeps_raw_payload() -> None:

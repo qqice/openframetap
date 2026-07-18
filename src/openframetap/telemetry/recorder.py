@@ -91,6 +91,9 @@ class TelemetryRecorder:
         setup_disconnect_count: int = 0,
         unintentional_disconnect_callbacks_total: int | None = None,
         error: str | None = None,
+        writes_attempted: int = 0,
+        pairing_requested: bool = False,
+        extra_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         for event in self.reassembler.finish():
             _write_jsonl(
@@ -124,10 +127,12 @@ class TelemetryRecorder:
                 if unintentional_disconnect_callbacks_total is None
                 else unintentional_disconnect_callbacks_total
             ),
-            "writes_attempted": 0,
-            "pairing_requested": False,
+            "writes_attempted": writes_attempted,
+            "pairing_requested": pairing_requested,
             "error": error,
         }
+        if extra_summary:
+            summary.update(extra_summary)
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )

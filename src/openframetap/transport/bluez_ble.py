@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import time
 from typing import Awaitable, Callable
 
@@ -13,6 +14,7 @@ from openframetap.protocol.commands import (
     CommandDefinition,
     SendAuthorization,
     assert_send_allowed,
+    validate_command_frame,
 )
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.framing import split_for_att
@@ -229,18 +231,34 @@ class BluezBleTransport:
         expected = (command.sender, command.receiver, command.cmd_set, command.cmd_id)
         if actual != expected:
             raise ValueError(f"frame metadata {actual!r} does not match command {expected!r}")
+        validate_command_frame(command, frame)
         if not self._client or not self._write_characteristic or not self.is_connected:
             raise RuntimeError("FFF5 transport is not connected")
         properties = {str(item).lower() for item in self._write_characteristic.properties}
         if not ({"write-without-response", "write"} & properties):
             raise RuntimeError(f"FFF5 is not writable: {sorted(properties)}")
         mtu = self.mtu or 23
-        for chunk_index, chunk in enumerate(split_for_att(raw, mtu=mtu)):
+        chunks = split_for_att(raw, mtu=mtu)
+        self.event_handler(
+            {
+                "wall_timestamp": utc_now(),
+                "monotonic_ns": time.monotonic_ns(),
+                "event": "fff5_frame_write_start",
+                "command": command.name,
+                "authorization_reference": authorization.approval_reference,
+                "frame_sha256": hashlib.sha256(raw).hexdigest(),
+                "frame_hex": raw.hex(),
+                "chunk_count": len(chunks),
+                "att_mtu_source": "bleak_public_property",
+                "att_mtu_used_for_chunking": mtu,
+            }
+        )
+        for chunk_index, chunk in enumerate(chunks):
             self.event_handler(
                 {
                     "wall_timestamp": utc_now(),
                     "monotonic_ns": time.monotonic_ns(),
-                    "event": "fff5_write",
+                    "event": "fff5_chunk_write_attempt",
                     "command": command.name,
                     "authorization_reference": authorization.approval_reference,
                     "chunk_index": chunk_index,
@@ -250,6 +268,27 @@ class BluezBleTransport:
             await self._client.write_gatt_char(
                 self._write_characteristic, chunk, response=False
             )
+            self.event_handler(
+                {
+                    "wall_timestamp": utc_now(),
+                    "monotonic_ns": time.monotonic_ns(),
+                    "event": "fff5_chunk_written",
+                    "command": command.name,
+                    "authorization_reference": authorization.approval_reference,
+                    "chunk_index": chunk_index,
+                    "data_hex": chunk.hex(),
+                }
+            )
+        self.event_handler(
+            {
+                "wall_timestamp": utc_now(),
+                "monotonic_ns": time.monotonic_ns(),
+                "event": "fff5_frame_write_complete",
+                "command": command.name,
+                "authorization_reference": authorization.approval_reference,
+                "frame_sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        )
 
     async def disconnect(self) -> None:
         if not self._client:

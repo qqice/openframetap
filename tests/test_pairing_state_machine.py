@@ -7,11 +7,11 @@ from openframetap.pairing.state_machine import PairingState, PairingStateMachine
 
 @dataclass
 class MockTransport:
-    sent_actions: list[str] = field(default_factory=list)
+    proposed_actions: list[str] = field(default_factory=list)
 
     def apply(self, action: str) -> None:
-        if action.startswith("send_"):
-            self.sent_actions.append(action)
+        if action.startswith("propose_"):
+            self.proposed_actions.append(action)
 
 
 def ready_machine() -> tuple[PairingStateMachine, MockTransport]:
@@ -27,14 +27,14 @@ def test_normal_pairing_responses() -> None:
     event = machine.pairing_status(b"\x00\x02")
     assert event.action == "wait_for_user"
     transport.apply(machine.device_approved(b"\x01").action)
-    transport.apply(machine.stage1_response(b"\x00").action)
-    event = machine.stage2_response(b"\x00")
+    transport.apply(machine.stage1_sent().action)
+    event = machine.stage2_sent()
     assert event.action == "complete"
     assert machine.state is PairingState.PAIRED
-    assert transport.sent_actions == [
-        "send_set_pairing_pin",
-        "send_pairing_stage1",
-        "send_pairing_stage2",
+    assert transport.proposed_actions == [
+        "propose_set_pairing_pin",
+        "propose_pairing_stage1",
+        "propose_pairing_stage2",
     ]
 
 
@@ -49,7 +49,7 @@ def test_timeout_fails_without_retrying_automatically() -> None:
     machine, transport = ready_machine()
     assert machine.timeout().action == "stop"
     assert machine.state is PairingState.FAILED
-    assert transport.sent_actions == ["send_set_pairing_pin"]
+    assert transport.proposed_actions == ["propose_set_pairing_pin"]
 
 
 def test_error_response_fails_closed() -> None:
@@ -65,7 +65,7 @@ def test_duplicate_status_never_causes_duplicate_send() -> None:
     event = machine.pairing_status(b"\x00\x02")
     transport.apply(event.action)
     assert event.action == "none"
-    assert transport.sent_actions == ["send_set_pairing_pin"]
+    assert transport.proposed_actions == ["propose_set_pairing_pin"]
 
 
 def test_disconnect_stops_state_machine() -> None:
@@ -83,7 +83,7 @@ def test_user_cancel_stops_state_machine() -> None:
 def test_attempts_never_exceed_two() -> None:
     machine, _ = ready_machine()
     machine.timeout()
-    assert machine.begin_authorized_attempt().action == "send_set_pairing_pin"
+    assert machine.begin_authorized_attempt().action == "propose_set_pairing_pin"
     machine.timeout()
     event = machine.begin_authorized_attempt()
     assert event.action == "stop"

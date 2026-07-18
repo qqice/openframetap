@@ -4,15 +4,17 @@ import argparse
 import asyncio
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 
 from openframetap.ble_scan import load_replay, render_scan, scan, scan_payload
 from openframetap.devices.pocket3 import POCKET3_PROFILE
 from openframetap.gatt_probe import probe, write_probe
 from openframetap.pairing.pocket3 import write_pairing_proposal
+from openframetap.protocol.commands import PAIRING_COMMANDS
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.reassembly import DumlStreamReassembler
-from openframetap.session import listen_pocket3
+from openframetap.session import listen_pocket3, manual_send_pocket3_frame
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -54,7 +56,7 @@ def _decode_stream(raw: bytes) -> tuple[list[dict], list[dict]]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="openframetap")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    ble = subcommands.add_parser("ble", help="read-only BLE operations")
+    ble = subcommands.add_parser("ble", help="BLE observation and human-gated single-frame tools")
     ble_commands = ble.add_subparsers(dest="ble_command", required=True)
 
     scan_parser = ble_commands.add_parser("scan", help="passively observe advertisements")
@@ -71,6 +73,19 @@ def build_parser() -> argparse.ArgumentParser:
     listen_parser.add_argument("address")
     listen_parser.add_argument("--seconds", type=int, default=60)
     listen_parser.add_argument("--output-dir", type=Path)
+
+    manual_write = ble_commands.add_parser(
+        "manual-write",
+        help="internal runtime for one locally confirmed allowlisted frame",
+    )
+    manual_write.add_argument("address")
+    manual_write.add_argument("--hex", dest="hex_data", required=True)
+    manual_write.add_argument(
+        "--command", dest="frame_command", choices=sorted(PAIRING_COMMANDS), required=True
+    )
+    manual_write.add_argument("--confirmed-sha256", required=True)
+    manual_write.add_argument("--seconds", type=int, default=20)
+    manual_write.add_argument("--output-dir", type=Path, required=True)
 
     duml = subcommands.add_parser("duml", help="offline DUML operations")
     duml_commands = duml.add_subparsers(dest="duml_command", required=True)
@@ -133,6 +148,29 @@ def main(argv: list[str] | None = None) -> int:
             listen_pocket3(args.address, seconds=args.seconds, output_dir=output_dir)
         )
         print(json.dumps({"output_dir": str(output_dir), "summary": payload}, indent=2))
+        return 0 if ok else 1
+    if args.command == "ble" and args.ble_command == "manual-write":
+        if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1":
+            print(
+                "REFUSED: use scripts/remote.sh pocket3-send-frame so the local human "
+                "must enter the full SHA-256."
+            )
+            return 4
+        try:
+            raw = bytes.fromhex("".join(args.hex_data.replace("0x", "").split()))
+        except ValueError as exc:
+            raise SystemExit(f"invalid hexadecimal input: {exc}") from exc
+        payload, ok = asyncio.run(
+            manual_send_pocket3_frame(
+                args.address,
+                raw=raw,
+                command_name=args.frame_command,
+                confirmed_sha256=args.confirmed_sha256,
+                seconds=args.seconds,
+                output_dir=args.output_dir,
+            )
+        )
+        print(json.dumps({"output_dir": str(args.output_dir), "summary": payload}, indent=2))
         return 0 if ok else 1
     if args.command == "duml" and args.duml_command == "decode":
         if args.hex_data is not None:
