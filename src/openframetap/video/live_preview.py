@@ -51,6 +51,11 @@ def checksum_manifest(paths: list[Path], root: Path) -> str:
     )
 
 
+def write_checksum_manifest(path: Path, content: str) -> None:
+    with path.open("w", encoding="ascii", newline="\n") as stream:
+        stream.write(content)
+
+
 def _redact(value: str) -> str:
     if not value.startswith(("rtmp://", "rtsp://")):
         return value
@@ -174,9 +179,8 @@ def write_sanitized_preview_artifacts(directory: Path, payload: dict) -> list[Pa
     )
     paths.append(report)
     checksum = directory / "checksums.sha256"
-    checksum.write_text(
-        "".join(f"{_sha256(path)}  {path.name}\n" for path in paths),
-        encoding="ascii",
+    write_checksum_manifest(
+        checksum, "".join(f"{_sha256(path)}  {path.name}\n" for path in paths)
     )
     return paths + [checksum]
 
@@ -377,8 +381,7 @@ def run_preview(
         checks.append(private_dir / "mediamtx-status.json")
     if screenshot_path.is_file():
         checks.append(screenshot_path)
-    (private_dir / "checksums.sha256").write_text(
-        checksum_manifest(checks, private_dir),
-        encoding="ascii",
+    write_checksum_manifest(
+        private_dir / "checksums.sha256", checksum_manifest(checks, private_dir)
     )
     return payload

@@ -14,6 +14,7 @@ from openframetap.video.live_preview import (
     decode_error_lines,
     parse_fps_messages,
     parse_frame_reports,
+    write_checksum_manifest,
 )
 from openframetap.video.gst_player import should_apply_fullscreen
 from openframetap.video.latency import parse_latency_tracer
@@ -184,6 +185,9 @@ def test_checksum_manifest_uses_portable_relative_paths(tmp_path: Path) -> None:
     manifest = checksum_manifest([screenshot], tmp_path)
     assert manifest.endswith("  screenshots/preview.png\n")
     assert str(tmp_path) not in manifest
+    output = tmp_path / "checksums.sha256"
+    write_checksum_manifest(output, manifest)
+    assert b"\r" not in output.read_bytes()
 
 
 def test_wayland_fullscreen_is_only_applied_after_first_frame() -> None:
