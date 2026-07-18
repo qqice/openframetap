@@ -117,7 +117,7 @@ Usage:
   ./scripts/remote.sh pocket3-pair-status
   ./scripts/remote.sh pocket3-pair
   ./scripts/remote.sh pocket3-telemetry [seconds]
-  ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds]
+  ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh setup-python
 EOF
 }
@@ -231,10 +231,11 @@ bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
     exit "$status"
     ;;
   pocket3-send-frame)
-    [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
+    [[ $# -ge 3 && $# -le 5 ]] || { usage >&2; exit 2; }
     frame_path="$2"
     command_name="$3"
     seconds="${4:-20}"
+    prerequisite_path="${5:-}"
     [[ -f "$frame_path" ]] || { echo "frame file not found: $frame_path" >&2; exit 2; }
     [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'seconds must be a positive integer' >&2; exit 2; }
     case "$command_name" in
@@ -243,6 +244,16 @@ bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
     esac
     frame_hex="$(od -An -v -tx1 "$frame_path" | tr -d ' \n')"
     frame_sha256="$(sha256sum "$frame_path" | awk '{print tolower($1)}')"
+    prerequisite_hex=""
+    prerequisite_sha256=""
+    if [[ -n "$prerequisite_path" ]]; then
+      [[ -f "$prerequisite_path" ]] || {
+        echo "required incoming frame file not found: $prerequisite_path" >&2
+        exit 2
+      }
+      prerequisite_hex="$(od -An -v -tx1 "$prerequisite_path" | tr -d ' \n')"
+      prerequisite_sha256="$(sha256sum "$prerequisite_path" | awk '{print tolower($1)}')"
+    fi
     [[ -n "$frame_hex" ]] || { echo 'frame file is empty' >&2; exit 2; }
     print_target
     printf '[openframetap] MANUAL SINGLE-FRAME WRITE\n'
@@ -250,6 +261,11 @@ bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
     printf '[openframetap] Command: %s\n' "$command_name"
     printf '[openframetap] Frame hex: %s\n' "$frame_hex"
     printf '[openframetap] SHA-256: %s\n' "$frame_sha256"
+    if [[ -n "$prerequisite_hex" ]]; then
+      printf '[openframetap] Required incoming frame: %s\n' "$prerequisite_hex"
+      printf '[openframetap] Required incoming SHA-256: %s\n' "$prerequisite_sha256"
+      printf '[openframetap] No write occurs unless that exact incoming frame is observed.\n'
+    fi
     printf '[openframetap] No automatic follow-up frame will be sent.\n'
     printf '[openframetap] Type the full SHA-256 to write this one frame: '
     IFS= read -r typed_sha256
@@ -260,7 +276,7 @@ bash scripts/capture-pocket3.sh telemetry '$POCKET3_ADDRESS' '$seconds'"
     deploy || exit $?
     run_remote manual-frame "set -u
 cd $REMOTE_DIR
-bash scripts/capture-pocket3.sh manual-frame '$POCKET3_ADDRESS' '$seconds' '$frame_hex' '$command_name' '$frame_sha256'"
+bash scripts/capture-pocket3.sh manual-frame '$POCKET3_ADDRESS' '$seconds' '$frame_hex' '$command_name' '$frame_sha256' '$prerequisite_hex'"
     status=$?
     stem="$(extract_stem ARTIFACT_DIR)"
     [[ -n "$stem" ]] || { echo '[openframetap] Missing manual-frame artifact marker' >&2; exit 3; }

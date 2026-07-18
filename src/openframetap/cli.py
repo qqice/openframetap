@@ -10,7 +10,10 @@ from pathlib import Path
 from openframetap.ble_scan import load_replay, render_scan, scan, scan_payload
 from openframetap.devices.pocket3 import POCKET3_PROFILE
 from openframetap.gatt_probe import probe, write_probe
-from openframetap.pairing.pocket3 import write_pairing_proposal
+from openframetap.pairing.pocket3 import (
+    write_pairing_proposal,
+    write_pairing_stage1_proposal,
+)
 from openframetap.protocol.commands import PAIRING_COMMANDS
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.reassembly import DumlStreamReassembler
@@ -84,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--command", dest="frame_command", choices=sorted(PAIRING_COMMANDS), required=True
     )
     manual_write.add_argument("--confirmed-sha256", required=True)
+    manual_write.add_argument("--require-incoming-hex")
     manual_write.add_argument("--seconds", type=int, default=20)
     manual_write.add_argument("--output-dir", type=Path, required=True)
 
@@ -110,6 +114,15 @@ def build_parser() -> argparse.ArgumentParser:
     pair_start.add_argument("address")
     pair_start.add_argument("--pin", default="5160")
     pair_start.add_argument("--proposal-dir", type=Path, default=Path("artifacts/local"))
+    pair_stage1 = pair_commands.add_parser(
+        "propose-stage1", help="offline-generate an ACK tied to one captured approval frame"
+    )
+    pair_stage1.add_argument("address")
+    pair_stage1.add_argument("--approval-hex", required=True)
+    pair_stage1.add_argument("--source-file", required=True)
+    pair_stage1.add_argument("--source-sha256", required=True)
+    pair_stage1.add_argument("--source-note", required=True)
+    pair_stage1.add_argument("--proposal-dir", type=Path, default=Path("artifacts/local"))
 
     telemetry = pocket3_commands.add_parser(
         "telemetry", help="subscribe and record notifications without active queries"
@@ -158,6 +171,11 @@ def main(argv: list[str] | None = None) -> int:
             return 4
         try:
             raw = bytes.fromhex("".join(args.hex_data.replace("0x", "").split()))
+            required_incoming_raw = (
+                bytes.fromhex("".join(args.require_incoming_hex.replace("0x", "").split()))
+                if args.require_incoming_hex
+                else None
+            )
         except ValueError as exc:
             raise SystemExit(f"invalid hexadecimal input: {exc}") from exc
         payload, ok = asyncio.run(
@@ -168,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
                 confirmed_sha256=args.confirmed_sha256,
                 seconds=args.seconds,
                 output_dir=args.output_dir,
+                required_incoming_raw=required_incoming_raw,
             )
         )
         print(json.dumps({"output_dir": str(args.output_dir), "summary": payload}, indent=2))
@@ -203,6 +222,25 @@ def main(argv: list[str] | None = None) -> int:
             payload["dji_application_pairing"] = "unknown unless explicit status frame captured"
             print(json.dumps({"output_dir": str(output_dir), "summary": payload}, indent=2))
             return 0 if ok else 1
+        if args.pair_command == "propose-stage1":
+            try:
+                approval_raw = bytes.fromhex(
+                    "".join(args.approval_hex.replace("0x", "").split())
+                )
+            except ValueError as exc:
+                raise SystemExit(f"invalid approval hexadecimal input: {exc}") from exc
+            payload = write_pairing_stage1_proposal(
+                args.proposal_dir,
+                required_approval_raw=approval_raw,
+                source={
+                    "file": args.source_file,
+                    "sha256": args.source_sha256.lower(),
+                    "note": args.source_note,
+                },
+            )
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            print("PROPOSAL ONLY: no BLE connection or write was attempted.")
+            return 0
         if args.address.upper() != (POCKET3_PROFILE.default_address or "").upper():
             address_note = f"proposal target selected by caller: {args.address}"
         else:

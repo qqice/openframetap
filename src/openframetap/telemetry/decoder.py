@@ -38,6 +38,31 @@ def _ascii_prefix(payload: bytes) -> str | None:
 def decode_telemetry(frame: DumlFrame) -> TelemetryDecode:
     raw = frame.payload.hex()
     key = (frame.cmd_set, frame.cmd_id)
+    if key == (0x07, 0x45) and frame.flags == 0xC0 and frame.payload in {
+        b"\x00\x01",
+        b"\x00\x02",
+    }:
+        return TelemetryDecode(
+            "pairing_status",
+            True,
+            "high",
+            "local hardware fact",
+            {
+                "status": (
+                    "already_paired" if frame.payload[1] == 1 else "confirmation_required"
+                )
+            },
+            raw,
+        )
+    if key == (0x07, 0x46) and frame.flags == 0x40 and frame.payload == b"\x01":
+        return TelemetryDecode(
+            "pairing_approval_request",
+            True,
+            "high",
+            "local hardware fact",
+            {"pocket_screen_confirmation_observed": True},
+            raw,
+        )
     if key == (0x02, 0x80):
         return TelemetryDecode(
             "pairing_started",

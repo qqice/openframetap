@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from openframetap.pairing.state_machine import PairingState, PairingStateMachine
+from openframetap.pairing.pocket3 import pairing_stage1_proposal
+from openframetap.protocol.duml import decode_duml_frame
 
 
 @dataclass
@@ -88,3 +90,18 @@ def test_attempts_never_exceed_two() -> None:
     event = machine.begin_authorized_attempt()
     assert event.action == "stop"
     assert machine.attempts == 2
+
+
+def test_stage1_proposal_mirrors_exact_live_approval_sequence() -> None:
+    approval = bytes.fromhex("550e046607020100400746019767")
+    raw, payload = pairing_stage1_proposal(
+        required_approval_raw=approval,
+        source={"file": "fixture", "sha256": "fixture", "note": "fixture"},
+    )
+    decoded = decode_duml_frame(raw)
+    assert decoded.sequence == 0x0100
+    assert decoded.sender == 2 and decoded.receiver == 7
+    assert decoded.flags == 0xC0
+    assert (decoded.cmd_set, decoded.cmd_id, decoded.payload) == (7, 0x46, b"\x00")
+    assert decoded.crc8_valid and decoded.crc16_valid
+    assert payload["required_incoming_frame"]["hex"] == approval.hex()

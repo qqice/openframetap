@@ -1,0 +1,31 @@
+{
+  "fixture_schema": 1,
+  "source": {
+    "capture_directory": "artifacts/remote/pocket3-manual-frame-20260718-205833",
+    "source_file": "duml-frames.jsonl",
+    "source_sha256": "92ab52a7ed2401298698edf73c69dd2660560fa5d4a2f5fca7ce4cfa74619d10",
+    "direction": "Pocket-to-OpenFrameTap FFF4 notification",
+    "outgoing_frame_sha256": "57725c09e6cd6f973161fb3e90fb74f1abc008f089c858df0dd7dc4ac63308a4",
+    "automatic_follow_up_frames": 0
+  },
+  "frames": [
+    {
+      "name": "live_pairing_confirmation_required",
+      "wall_timestamp": "2026-07-18T12:58:35.528951+00:00",
+      "monotonic_ns": 11505856817709,
+      "source_notification_index": 13,
+      "hex": "550f04a2070272aac0074500020069",
+      "expected_type": "pairing_status",
+      "expected_field": ["status", "confirmation_required"]
+    },
+    {
+      "name": "live_repeated_pairing_approval",
+      "wall_timestamp": "2026-07-18T12:58:46.482913+00:00",
+      "monotonic_ns": 11516810752092,
+      "source_notification_index": 446,
+      "hex": "550e046607020100400746019767",
+      "expected_type": "pairing_approval_request",
+      "expected_field": ["pocket_screen_confirmation_observed", true]
+    }
+  ]
+}

@@ -22,6 +22,7 @@ from openframetap.transport.bluez_ble import (
 from openframetap.session import manual_send_pocket3_frame
 
 LIVE_FIXTURE = Path(__file__).parent / "fixtures" / "live_fff4_frames.json"
+PAIRING_FIXTURE = Path(__file__).parent / "fixtures" / "manual_pairing_frames.json"
 
 
 def test_ble_error_categories() -> None:
@@ -287,6 +288,69 @@ def test_manual_mode_reports_confirmation_but_still_sends_no_followup(tmp_path) 
     assert summary["automatic_follow_up_frames"] == 0
 
 
+def test_manual_prerequisite_timeout_causes_zero_writes(tmp_path) -> None:
+    sent = []
+    request = build_set_pairing_pin_frame()
+    unrelated = encode_duml_frame(
+        sender=1,
+        receiver=2,
+        sequence=1,
+        flags=0,
+        cmd_set=2,
+        cmd_id=0x80,
+        payload=b"ready",
+    )
+    required = bytes.fromhex("550e046607020100400746019767")
+
+    class FakeTransport:
+        def __init__(self, _address, _profile, *, event_handler, **_kwargs) -> None:
+            self.is_connected = False
+            self.active_disconnect_count = 0
+            self.setup_disconnect_count = 0
+            self.disconnect_count = 0
+
+        async def connect(self) -> None:
+            self.is_connected = True
+
+        async def subscribe(self, handler) -> None:
+            await handler(
+                NotificationRecord(
+                    wall_timestamp="2026-07-18T00:00:00+00:00",
+                    monotonic_ns=1,
+                    characteristic_uuid=POCKET3_PROFILE.notification_uuid,
+                    characteristic_handle=44,
+                    data=unrelated,
+                )
+            )
+
+        async def send_frame(self, *_args, **_kwargs) -> None:
+            sent.append(True)
+
+        async def disconnect(self) -> None:
+            self.is_connected = False
+
+    import hashlib
+
+    summary, ok = asyncio.run(
+        manual_send_pocket3_frame(
+            "fixture",
+            raw=request,
+            command_name="set_pairing_pin",
+            confirmed_sha256=hashlib.sha256(request).hexdigest(),
+            seconds=0.001,
+            output_dir=tmp_path,
+            required_incoming_raw=required,
+            prerequisite_timeout=0.001,
+            transport_factory=FakeTransport,
+        )
+    )
+    assert not ok
+    assert sent == []
+    assert summary["writes_attempted"] == 0
+    assert summary["required_incoming_frame_observed"] is False
+    assert "TimeoutError" in summary["error"]
+
+
 def test_battery_decoder_keeps_raw_payload() -> None:
     payload = bytearray(34)
     payload[20] = 88
@@ -335,6 +399,20 @@ def test_live_fff4_fixture_replay(entry: dict) -> None:
         assert decoded.fields["battery_percent_candidate"] == 100
     if decoded.message_type == "device_info_candidate":
         assert decoded.fields["model_or_product_ascii"] == "hg212"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    json.loads(PAIRING_FIXTURE.read_text(encoding="utf-8"))["frames"],
+    ids=lambda entry: entry["name"],
+)
+def test_manual_pairing_fixture_replay(entry: dict) -> None:
+    frame = decode_duml_frame(bytes.fromhex(entry["hex"]))
+    assert frame.crc8_valid and frame.crc16_valid
+    decoded = decode_telemetry(frame)
+    assert decoded.message_type == entry["expected_type"]
+    field, expected = entry["expected_field"]
+    assert decoded.fields[field] == expected
 
 
 def test_recorder_serializes_notification_frame_and_summary(tmp_path) -> None:

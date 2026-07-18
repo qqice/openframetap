@@ -9,6 +9,7 @@ seconds="${3:-60}"
 frame_hex="${4:-}"
 command_name="${5:-}"
 confirmed_sha256="${6:-}"
+required_incoming_hex="${7:-}"
 [[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" ]] || {
   echo 'operation must be listen, telemetry, pair-status, or manual-frame' >&2
   exit 2
@@ -122,9 +123,16 @@ case "$operation" in
       echo 'manual-frame requires hex, command name, and confirmed SHA-256' >&2
       exit 2
     }
-    OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" -m openframetap ble manual-write "$address" \
-      --hex "$frame_hex" --command "$command_name" --confirmed-sha256 "$confirmed_sha256" \
-      --seconds "$seconds" --output-dir "$output_dir" 2>&1 | tee "$session_output"
+    manual_args=(
+      -m openframetap ble manual-write "$address"
+      --hex "$frame_hex" --command "$command_name" --confirmed-sha256 "$confirmed_sha256"
+      --seconds "$seconds" --output-dir "$output_dir"
+    )
+    if [[ -n "$required_incoming_hex" ]]; then
+      manual_args+=(--require-incoming-hex "$required_incoming_hex")
+    fi
+    OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" "${manual_args[@]}" \
+      2>&1 | tee "$session_output"
     ;;
 esac
 session_status=${PIPESTATUS[0]}

@@ -77,6 +77,8 @@ async def manual_send_pocket3_frame(
     confirmed_sha256: str,
     seconds: int,
     output_dir: Path,
+    required_incoming_raw: bytes | None = None,
+    prerequisite_timeout: float = 10.0,
     transport_factory: Callable = BluezBleTransport,
 ) -> tuple[dict, bool]:
     """Execute exactly one user-confirmed frame, then listen without follow-ups.
@@ -108,6 +110,16 @@ async def manual_send_pocket3_frame(
     if actual != expected:
         raise ValueError(f"frame metadata {actual!r} does not match command {expected!r}")
     validate_command_frame(command, decoded)
+    required_incoming_raw = (
+        bytes(required_incoming_raw) if required_incoming_raw is not None else None
+    )
+    required_incoming = None
+    if required_incoming_raw is not None:
+        required_incoming = decode_duml_frame(required_incoming_raw)
+        if not (required_incoming.crc8_valid and required_incoming.crc16_valid):
+            raise ValueError("required incoming frame CRC validation failed")
+        if prerequisite_timeout <= 0:
+            raise ValueError("prerequisite_timeout must be positive")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     transmission_path = output_dir / "transmission.json"
@@ -120,6 +132,15 @@ async def manual_send_pocket3_frame(
         "frame_hex": raw.hex(),
         "decoded": decoded.to_dict(),
         "follow_up_frames_sent": 0,
+        "required_incoming_frame_hex": (
+            required_incoming_raw.hex() if required_incoming_raw is not None else None
+        ),
+        "required_incoming_frame_sha256": (
+            hashlib.sha256(required_incoming_raw).hexdigest()
+            if required_incoming_raw is not None
+            else None
+        ),
+        "required_incoming_frame_observed": False,
     }
     transmission_path.write_text(
         json.dumps(transmission, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -131,6 +152,7 @@ async def manual_send_pocket3_frame(
         operation="single-user-confirmed-frame-then-listen",
     )
     ready = asyncio.Event()
+    prerequisite_observed = asyncio.Event()
     observer = DumlStreamReassembler()
     pairing_status: str | None = None
     pocket_confirmation_observed = False
@@ -143,6 +165,19 @@ async def manual_send_pocket3_frame(
             frame = event.frame
             if event.kind != "frame" or frame is None:
                 continue
+            if required_incoming_raw is not None and frame.raw == required_incoming_raw:
+                prerequisite_observed.set()
+                transmission["required_incoming_frame_observed"] = True
+                transmission["required_incoming_observed_at"] = notification.wall_timestamp
+                transmission_path.write_text(
+                    json.dumps(transmission, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                print(
+                    "REQUIRED_INCOMING_FRAME_OBSERVED: exact prerequisite matched; "
+                    "the already human-confirmed single frame may proceed.",
+                    flush=True,
+                )
             if (frame.cmd_set, frame.cmd_id) == (0x07, 0x45):
                 expected_meta = (
                     frame.sender == 0x07
@@ -193,7 +228,10 @@ async def manual_send_pocket3_frame(
     try:
         await transport.connect()
         await transport.subscribe(notification_handler)
-        await asyncio.wait_for(ready.wait(), timeout=5.0)
+        if required_incoming_raw is None:
+            await asyncio.wait_for(ready.wait(), timeout=5.0)
+        else:
+            await asyncio.wait_for(prerequisite_observed.wait(), timeout=prerequisite_timeout)
         transmission["write_started_at"] = datetime.now(timezone.utc).isoformat()
         transmission_path.write_text(
             json.dumps(transmission, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -239,6 +277,10 @@ async def manual_send_pocket3_frame(
                 "command_sent": command_name if frame_written else None,
                 "automatic_follow_up_frames": 0,
                 "bluez_pairing_requested": False,
+                "required_incoming_frame": (
+                    required_incoming.to_dict() if required_incoming is not None else None
+                ),
+                "required_incoming_frame_observed": prerequisite_observed.is_set(),
                 "pairing_status": pairing_status,
                 "pocket_confirmation_observed": pocket_confirmation_observed,
                 "protocol_mismatch": protocol_mismatch,
