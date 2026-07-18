@@ -79,6 +79,9 @@ def test_live_rtmp_and_rtsp_sources_are_structured_and_hls_is_forbidden() -> Non
         decoder="mppvideodec",
     )
     assert rtmp.elements[:2] == ("rtmpsrc", "flvdemux")
+    assert "demux.audio" in rtmp.argv
+    assert "fakesink" in rtmp.argv
+    assert rtmp.audio_enabled is False
     assert rtsp.elements[:2] == ("rtspsrc", "rtph264depay")
     assert "leaky=downstream" in rtmp.argv
     assert any("waylandsink fullscreen=true" in item for item in rtmp.argv)

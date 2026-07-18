@@ -85,6 +85,7 @@ def offline_pipeline(
     elements = (
         "filesrc",
         "flvdemux",
+        "audio-fakesink",
         "queue",
         "h264parse",
         "capsfilter",
@@ -99,6 +100,14 @@ def offline_pipeline(
         "!",
         "flvdemux",
         "name=demux",
+        "demux.audio",
+        "!",
+        "queue",
+        "max-size-buffers=2",
+        "leaky=downstream",
+        "!",
+        "fakesink",
+        "sync=false",
         "demux.video",
         "!",
         "queue",
@@ -129,8 +138,31 @@ def live_pipeline(
         raise ValueError("HLS is forbidden as the low-latency default")
     params = profile_parameters(profile)
     if source == "rtmp":
-        source_tokens = ("rtmpsrc", f"location={url}", "!", "flvdemux", "name=demux", "demux.video")
-        elements = ("rtmpsrc", "flvdemux", "queue", "h264parse", "capsfilter", decoder)
+        source_tokens = (
+            "rtmpsrc",
+            f"location={url}",
+            "!",
+            "flvdemux",
+            "name=demux",
+            "demux.audio",
+            "!",
+            "queue",
+            "max-size-buffers=2",
+            "leaky=downstream",
+            "!",
+            "fakesink",
+            "sync=false",
+            "demux.video",
+        )
+        elements = (
+            "rtmpsrc",
+            "flvdemux",
+            "audio-fakesink",
+            "queue",
+            "h264parse",
+            "capsfilter",
+            decoder,
+        )
     elif source == "rtsp":
         source_tokens = (
             "rtspsrc",
