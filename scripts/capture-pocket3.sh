@@ -12,7 +12,9 @@ confirmed_sha256="${6:-}"
 required_incoming_hex="${7:-}"
 proposal_path="${4:-}"
 workflow_state_path="${5:-}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" ]] || {
+wifi_proposal_path="${5:-}"
+combined_workflow_state_path="${6:-}"
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] || {
   echo 'unsupported capture operation' >&2
   exit 2
 }
@@ -30,16 +32,17 @@ case "$operation" in
   rtmp-proposal) prefix="pocket3-rtmp-prepare" ;;
   rtmp-wifi-proposal) prefix="pocket3-rtmp-wifi" ;;
   rtmp-prepare-recovery) prefix="pocket3-rtmp-prepare-recovery" ;;
+  rtmp-prepare-wifi-recovery) prefix="pocket3-rtmp-prepare-wifi-recovery" ;;
 esac
 stem="$prefix-$stamp"
-if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" ]]; then
+if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
   artifact_relative="private/$stem"
 else
   artifact_relative="$stem"
 fi
 output_dir="artifacts/$artifact_relative"
 mkdir -p "$output_dir"
-[[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" ]] && chmod 700 "$output_dir"
+[[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] && chmod 700 "$output_dir"
 snoop_path="$output_dir/capture.btsnoop"
 text_path="$output_dir/btmon.txt"
 session_output="$output_dir/session-output.txt"
@@ -93,13 +96,13 @@ stop_btmon() {
 }
 
 finalize_checksums() {
-  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-prepare-recovery" ]]; then
+  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-prepare-recovery" && "$operation" != "rtmp-prepare-wifi-recovery" ]]; then
     return 0
   fi
   local names=(capture.btsnoop btmon.txt notifications.jsonl duml-frames.jsonl events.jsonl)
   if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" ]]; then
     names+=(summary.json transmission.json session-output.txt)
-  elif [[ "$operation" == "rtmp-prepare-recovery" ]]; then
+  elif [[ "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
     names+=(summary.json recovery-candidates.jsonl recovery-events.jsonl session-output.txt)
   fi
   local name
@@ -226,6 +229,20 @@ case "$operation" in
     OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" -m openframetap pocket3 rtmp recover-prepare \
       "$proposal_path" --address "$address" --seconds "$seconds" \
       --output-dir "$output_dir" --state-file "$workflow_state_path" \
+      2>&1 | tee "$session_output"
+    ;;
+  rtmp-prepare-wifi-recovery)
+    [[ -t 0 || "${OPENFRAMETAP_TEST_MODE:-0}" == "1" ]] || {
+      echo 'RTMP prepare/Wi-Fi recovery requires the owner at an interactive TTY' >&2
+      exit 4
+    }
+    [[ -f "$proposal_path" && -f "$wifi_proposal_path" && -f "$combined_workflow_state_path" ]] || {
+      echo 'fixed prepare proposal, Wi-Fi proposal, or workflow state file is missing' >&2
+      exit 2
+    }
+    OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" -m openframetap pocket3 rtmp recover-prepare-wifi \
+      "$proposal_path" "$wifi_proposal_path" --address "$address" --seconds "$seconds" \
+      --output-dir "$output_dir" --state-file "$combined_workflow_state_path" \
       2>&1 | tee "$session_output"
     ;;
 esac

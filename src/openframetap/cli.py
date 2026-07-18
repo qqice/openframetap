@@ -247,6 +247,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
     )
+    rtmp_recover_prepare_wifi = rtmp_commands.add_parser(
+        "recover-prepare-wifi",
+        help="run fixed prepare stages then one fixed Wi-Fi retry in one connection",
+    )
+    rtmp_recover_prepare_wifi.add_argument("prepare_proposal", type=Path)
+    rtmp_recover_prepare_wifi.add_argument("wifi_proposal", type=Path)
+    rtmp_recover_prepare_wifi.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    rtmp_recover_prepare_wifi.add_argument("--seconds", type=int, default=30)
+    rtmp_recover_prepare_wifi.add_argument("--response-timeout", type=float, default=15.0)
+    rtmp_recover_prepare_wifi.add_argument("--output-dir", type=Path, required=True)
+    rtmp_recover_prepare_wifi.add_argument(
+        "--state-file",
+        type=Path,
+        default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
+    )
     rtmp_analyze_prepare = rtmp_commands.add_parser(
         "analyze-prepare", help="offline-validate a captured prepare response"
     )
@@ -921,6 +939,80 @@ def main(argv: list[str] | None = None) -> int:
                         "wifi_frames_sent": payload.get("wifi_frames_sent"),
                         "automatic_follow_up_frames": payload.get(
                             "automatic_follow_up_frames"
+                        ),
+                        "private_output": str(args.output_dir),
+                    },
+                    indent=2,
+                )
+            )
+            return 0 if ok else 1
+        if args.rtmp_command == "recover-prepare-wifi":
+            if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
+                print(
+                    "REFUSED: recover-prepare-wifi requires the owner to invoke the "
+                    "fixed interactive wrapper from a real TTY."
+                )
+                return 4
+            from openframetap.workflows.prepare_recovery_session import (
+                load_prepare_recovery_proposal,
+                run_prepare_recovery_session,
+            )
+
+            require_private_directory(args.output_dir)
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            if workflow.phase != "wifi_connected_or_unknown":
+                print(
+                    "REFUSED: prepare/Wi-Fi recovery requires wifi_connected_or_unknown "
+                    f"state, found {workflow.phase}"
+                )
+                return 4
+            _prepare, prepare_stages = load_prepare_recovery_proposal(
+                args.prepare_proposal, expected_address=args.address
+            )
+            wifi_proposal, _wifi_raw = load_fixed_wifi_proposal(
+                args.wifi_proposal,
+                expected_address=args.address,
+                expected_sequence=0x8C1A,
+            )
+            print("OWNER-INVOKED FIXED PREPARE + WI-FI RECOVERY")
+            print("Command invocation authorizes exactly three fixed frames:")
+            for index, (stage, raw) in enumerate(prepare_stages, start=1):
+                print(
+                    f"  Stage {index}: {stage['command']} sha256={stage['frame_sha256']} "
+                    f"hex={raw.hex()}"
+                )
+            print(
+                "  Stage 3: wifi_connect "
+                f"sha256={wifi_proposal['frame_sha256']} sequence=0x8C1A "
+                "(private payload redacted)"
+            )
+            print(
+                "Stage 2 requires the exact Stage 1 ACK; Wi-Fi requires the exact "
+                "Stage 2 response. No RTMP configuration or stream start/stop is included."
+            )
+            payload, ok = asyncio.run(
+                run_prepare_recovery_session(
+                    args.address,
+                    proposal_path=args.prepare_proposal,
+                    wifi_proposal_path=args.wifi_proposal,
+                    wifi_sequence=0x8C1A,
+                    output_dir=args.output_dir,
+                    confirmation_callback=lambda _candidate: True,
+                    response_timeout=args.response_timeout,
+                    passive_seconds=args.seconds,
+                )
+            )
+            print(
+                json.dumps(
+                    {
+                        "ok": ok,
+                        "recovery_result": payload.get("recovery_result"),
+                        "writes_attempted": payload.get("writes_attempted"),
+                        "sent_frames": payload.get("sent_frames"),
+                        "wifi_frames_sent": payload.get("wifi_frames_sent"),
+                        "wifi_response": payload.get("wifi_response"),
+                        "rtmp_configuration_frames_sent": payload.get(
+                            "rtmp_configuration_frames_sent"
                         ),
                         "private_output": str(args.output_dir),
                     },

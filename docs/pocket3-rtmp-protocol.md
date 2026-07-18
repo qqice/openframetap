@@ -339,3 +339,49 @@ gate:     sent once only after exact Stage 1 ACK in the owner-invoked fixed comm
   loader now requires both 64-character prerequisite hashes, the invalid
   proposal is un-sendable, and the corrected proposal references the actual
   paired-session summary SHA.
+
+## Prepare-recovery hardware result
+
+- 【实机事实】The owner invoked the fixed prepare-recovery wrapper once. Stage 1
+  `550e04660208feab4002e11abb3c` was written once and returned exact frame
+  `550e04660802feabc002e1008a61`: `08 -> 02`, sequence `FEAB`, flags `C0`,
+  `02/E1`, payload `00`, with valid CRC8 and CRC16.
+- 【实机事实】Only after that exact ACK, Stage 2
+  `551104920208ffab40028e00011c003bc8` was written once. It returned exact
+  same-sequence `80/02/8E` payload `0000011c0009030900000000000020` after
+  approximately 113.5 ms; both CRCs are valid.
+- 【实机事实】The 15.200-second session retained 563 notifications and 563 DUML
+  frames with zero CRC, reassembly, or connection-interruption failure. It
+  recorded two application writes, zero Wi-Fi frames, zero RTMP-configuration
+  frames, and zero unapproved follow-up frames.
+- 【实机事实】The raw evidence manifest under private capture stem
+  `pocket3-rtmp-prepare-recovery-20260719-023518` passed SHA-256 verification.
+  Its summary SHA-256 is
+  `34e0dfd95a52336e620edfa2206a05bd14fad533140fa793b85b89356285e9a1`.
+- 【捕获推断】The exact Mimo-shaped Stage 2 response proves that this Pocket 3
+  accepted the missing prepare-transport request. It does not by itself prove
+  Wi-Fi association or authorize stream configuration.
+- 【已否定假设】The Stage 2 frame is no longer merely an unverified Pocket 3
+  constant. Its request/response wire exchange is hardware-validated. The
+  meanings of the trailing response bytes after `0000011c00` remain unknown.
+
+## Same-connection Wi-Fi recovery boundary
+
+A fresh private Wi-Fi proposal uses sequence `0x8C1A`, retains the previously
+verified SSID/PSK fingerprints, and is bound to the successful prepare-recovery
+summary above. Its fixed frame SHA-256 is
+`8c4de55a03533eba4ef59d038acada497aedcf33a449c67bd433a411d1fd5a3f`;
+the credential-bearing payload remains private and ignored by Git.
+
+The fixed owner command creates one BLE connection and permits exactly:
+
+1. Stage 1 `02/E1` once.
+2. Stage 2 `02/8E 00011C00` once, only after the exact Stage 1 ACK.
+3. Wi-Fi `07/47` once, only after the exact Stage 2 response.
+
+It then listens passively for 30 seconds. A matching `C0/07/47` response is
+recorded verbatim but not over-interpreted; absence of such a response still
+requires independent router observation. The command contains no `08/78`,
+RTMP URL, stream-start, stream-stop, camera, gimbal, or additional Wi-Fi frame.
+Its invocation is consumed before deployment, preventing a second run with the
+same authorization.
