@@ -385,3 +385,38 @@ requires independent router observation. The command contains no `08/78`,
 RTMP URL, stream-start, stream-stop, camera, gimbal, or additional Wi-Fi frame.
 Its invocation is consumed before deployment, preventing a second run with the
 same authorization.
+
+## Same-connection Wi-Fi recovery result
+
+- 【实机事实】The owner invoked the fixed three-frame wrapper once. In one BLE
+  connection, Stage 1 returned exact `C0/02/E1 payload 00`; Stage 2 then
+  returned same-sequence `80/02/8E` payload
+  `0000011c0009000900000000000020`; only then was the fresh `0x8C1A` Wi-Fi
+  proposal written once.
+- 【实机事实】The Pocket returned frame
+  `550f04a207028c1ac007470000a82c`: sender `0x07`, receiver `0x02`, sequence
+  `0x8C1A`, flags `0xC0`, command `07/47`, payload `0000`. CRC8 and CRC16 are
+  valid. The response arrived approximately 3.890 seconds after the Wi-Fi
+  application-frame write event.
+- 【实机事实】The session recorded exactly three application frames: one
+  `02/E1`, one prepare `02/8E`, and one `07/47`. RTMP configuration, stream
+  start/stop, camera, and gimbal write counts remained zero.
+- 【实机事实】The 8.239-second capture retained 295 notifications and 295 valid
+  DUML frames with zero CRC, reassembly, setup-disconnect, or active-connection
+  interruption. The raw evidence manifest under private stem
+  `pocket3-rtmp-prepare-wifi-recovery-20260719-025302` passed SHA-256
+  verification.
+- 【参考实现结论】Reviewed implementations treat the two-byte zero `07/47`
+  payload as a successful Wi-Fi provisioning response; other captures also
+  expose a three-byte zero form, so response length is firmware-dependent.
+- 【捕获推断】The exact component-`0x07` ACK strongly supports successful
+  processing of the supplied network credentials and confirms that the missing
+  prepare Stage 2 caused the earlier no-response path.
+- 【待验证假设】Protocol success does not independently reveal the Pocket's
+  assigned LAN IPv4 or prove router client isolation is disabled. Router-side
+  observation or the first RTMP TCP connection must provide that network-level
+  evidence.
+- 【已否定假设】The first `07/47` silence was not evidence that this firmware
+  never acknowledges provisioning. With the two-stage prepare prerequisite in
+  the same BLE connection, the same Pocket returned an explicit `C0/07/47`
+  success-form response.
