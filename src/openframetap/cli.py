@@ -239,6 +239,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
     )
+    rtmp_analyze_wifi = rtmp_commands.add_parser(
+        "analyze-wifi", help="offline-validate a captured Wi-Fi provisioning result"
+    )
+    rtmp_analyze_wifi.add_argument("capture_dir", type=Path)
+    rtmp_analyze_wifi.add_argument("--sanitized-output", type=Path, required=True)
+    rtmp_analyze_wifi.add_argument(
+        "--state-file",
+        type=Path,
+        default=Path("artifacts/private/pocket3-rtmp-workflow.json"),
+    )
     rtmp_observe = rtmp_commands.add_parser(
         "observe", help="passively observe FFF4 without a DJI query"
     )
@@ -593,6 +603,56 @@ def main(argv: list[str] | None = None) -> int:
                         "response_frame_sha256": response_sha,
                         "response_latency_ms": result["response_latency_ms"],
                         "writes_attempted": 1,
+                        "automatic_follow_up_frames": 0,
+                    },
+                )
+                workflow.save(args.state_file)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 0
+        if args.rtmp_command == "analyze-wifi":
+            from openframetap.workflows.wifi_analysis import (
+                analyze_wifi_capture,
+                write_sanitized_wifi_analysis,
+            )
+
+            workflow = Pocket3RtmpWorkflow.load(args.state_file)
+            if workflow.phase not in {"wifi_sent", "wifi_connected_or_unknown"}:
+                print(
+                    f"REFUSED: Wi-Fi analysis requires wifi_sent state, found {workflow.phase}"
+                )
+                return 4
+            proposal_sha = next(
+                (
+                    entry.get("evidence", {}).get("proposal_sha256")
+                    for entry in reversed(workflow.history)
+                    if entry.get("to") in {"wifi_proposed", "wifi_sent"}
+                    and entry.get("evidence", {}).get("proposal_sha256")
+                ),
+                None,
+            )
+            if not proposal_sha:
+                print("REFUSED: workflow does not contain the approved Wi-Fi proposal SHA-256")
+                return 4
+            result = analyze_wifi_capture(
+                args.capture_dir, expected_frame_sha256=proposal_sha
+            )
+            write_sanitized_wifi_analysis(result, args.sanitized_output)
+            if workflow.phase == "wifi_sent":
+                workflow.transition(
+                    "wifi_connecting",
+                    evidence={
+                        "capture_directory_name": result["capture_directory_name"],
+                        "application_frames_written": 1,
+                        "att_write_command_chunks": result["att_write_command_chunks"],
+                    },
+                )
+                workflow.transition(
+                    "wifi_connected_or_unknown",
+                    evidence={
+                        "analysis_status": result["status"],
+                        "matching_sequence_response_count": result[
+                            "matching_sequence_response_count"
+                        ],
                         "automatic_follow_up_frames": 0,
                     },
                 )
