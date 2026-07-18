@@ -13,7 +13,11 @@ import sys
 import time
 from urllib.parse import urlsplit, urlunsplit
 
-from openframetap.display.session import discover_active_wayland_session
+from openframetap.display.session import (
+    discover_active_wayland_session,
+    gnome_overview_active,
+    set_gnome_overview_active,
+)
 from openframetap.network.secrets import require_private_directory
 from openframetap.video.latency import StartupTimeline, parse_latency_tracer
 from openframetap.video.metrics import ProcessMetrics, summarize_metrics
@@ -22,7 +26,7 @@ from openframetap.video.player_process import ProcessRegistry
 
 
 def _linux_parent_death_signal() -> None:
-    """Terminate gst-launch if the SSH-owned Python parent disappears."""
+    """Terminate the media child if the SSH-owned Python parent disappears."""
 
     if not sys.platform.startswith("linux"):
         return
@@ -85,6 +89,19 @@ def parse_fps_messages(text: str) -> dict:
     }
 
 
+def decode_error_lines(text: str) -> list[str]:
+    return [
+        line
+        for line in text.splitlines()
+        if not line.startswith("OPENFRAMETAP_PLAYER_")
+        and re.search(
+            r"\bERROR\b|not-negotiated|No valid frames|Error while opening decoder|decoder[^\n]*failed",
+            line,
+            re.IGNORECASE,
+        )
+    ]
+
+
 def run_preview(
     spec: PipelineSpec,
     *,
@@ -120,6 +137,9 @@ def run_preview(
     screenshot_path = private_dir / "screenshots" / "wayland-preview.png"
     screenshot_attempted = False
     screenshot_error = None
+    overview_initial = None
+    overview_hidden = False
+    overview_restored = False
     runtime_argv = [
         sys.executable,
         "-m",
@@ -141,6 +161,11 @@ def run_preview(
         sampler = ProcessMetrics(process.pid)
         deadline = time.monotonic() + duration_seconds
         try:
+            if spec.sink == "wayland" and spec.fullscreen:
+                overview_initial = gnome_overview_active(env)
+                if overview_initial:
+                    set_gnome_overview_active(False, env)
+                    overview_hidden = True
             while process.poll() is None:
                 samples.append(sampler.sample())
                 if (
@@ -168,7 +193,10 @@ def run_preview(
                         text = log_path.read_text(encoding="utf-8", errors="replace")
                     except OSError:
                         text = ""
-                    if "GstWaylandSink" in text and "caps = video/x-raw" in text:
+                    if (
+                        "OPENFRAMETAP_PLAYER_EVENT=" in text
+                        and '"event": "first_frame_observed"' in text
+                    ) or ("GstWaylandSink" in text and "caps = video/x-raw" in text):
                         timeline.sink_caps_observed_ns = time.monotonic_ns()
                 if time.monotonic() >= deadline:
                     timed_out = True
@@ -185,6 +213,9 @@ def run_preview(
                 process.kill()
                 process.wait(timeout=3)
             registry.unregister("preview")
+            if overview_initial is True:
+                set_gnome_overview_active(True, env)
+                overview_restored = True
     timeline.process_ended_ns = time.monotonic_ns()
     metrics_path.write_text(
         "".join(json.dumps(item.to_dict(), sort_keys=True) + "\n" for item in samples),
@@ -198,15 +229,7 @@ def run_preview(
             fullscreen_events.append(json.loads(encoded))
         except json.JSONDecodeError:
             continue
-    errors = [
-        line
-        for line in log_text.splitlines()
-        if re.search(
-            r"\bERROR\b|not-negotiated|No valid frames|Error while opening decoder|decoder[^\n]*failed",
-            line,
-            re.IGNORECASE,
-        )
-    ]
+    errors = decode_error_lines(log_text)
     payload = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "pipeline": {**spec.to_dict(), "argv": _redacted_argv(spec.argv)},
@@ -223,6 +246,9 @@ def run_preview(
                 and event.get("property_value") is True
                 for event in fullscreen_events
             ),
+            "gnome_overview_initially_active": overview_initial,
+            "gnome_overview_hidden_for_preview": overview_hidden,
+            "gnome_overview_restored": overview_restored,
         },
         "metrics": summarize_metrics(samples),
         "startup_timeline": timeline.to_dict(),

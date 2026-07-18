@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +124,77 @@ def discover_active_wayland_session() -> DisplaySession:
         except (RuntimeError, ValueError):
             continue
     raise RuntimeError("no active local Wayland session found")
+
+
+def parse_overview_active(text: str) -> bool:
+    normalized = text.strip().lower()
+    if "<true>" in normalized:
+        return True
+    if "<false>" in normalized:
+        return False
+    raise ValueError("GNOME OverviewActive response is not boolean")
+
+
+def gnome_overview_active(env: dict[str, str]) -> bool:
+    result = subprocess.run(
+        [
+            "gdbus",
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Shell",
+            "--object-path",
+            "/org/gnome/Shell",
+            "--method",
+            "org.freedesktop.DBus.Properties.Get",
+            "org.gnome.Shell",
+            "OverviewActive",
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "failed to query GNOME overview")
+    return parse_overview_active(result.stdout)
+
+
+def set_gnome_overview_active(
+    active: bool, env: dict[str, str], *, timeout: float = 2.0
+) -> None:
+    """Set transient shell state and wait for the asynchronous transition."""
+
+    result = subprocess.run(
+        [
+            "gdbus",
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Shell",
+            "--object-path",
+            "/org/gnome/Shell",
+            "--method",
+            "org.freedesktop.DBus.Properties.Set",
+            "org.gnome.Shell",
+            "OverviewActive",
+            f"<{str(active).lower()}>",
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "failed to set GNOME overview")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if gnome_overview_active(env) is active:
+            return
+        time.sleep(0.05)
+    raise RuntimeError("GNOME overview transition did not complete")
 
 
 def run_display_doctor(output_dir: Path) -> dict:

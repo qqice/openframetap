@@ -6,10 +6,10 @@ import re
 import pytest
 
 from openframetap.display.dsi import parse_mutter_state
-from openframetap.display.session import parse_loginctl_session
+from openframetap.display.session import parse_loginctl_session, parse_overview_active
 from openframetap.video.decoder_probe import parse_gst_inspect
 from openframetap.video.metrics import read_temperature_c, summarize_metrics, MetricSample
-from openframetap.video.live_preview import parse_fps_messages
+from openframetap.video.live_preview import decode_error_lines, parse_fps_messages
 from openframetap.video.gst_player import should_apply_fullscreen
 from openframetap.video.latency import parse_latency_tracer
 from openframetap.video.pipelines import (
@@ -107,6 +107,13 @@ def test_active_wayland_session_recovers_environment_missing_from_ssh(tmp_path: 
     assert env["DBUS_SESSION_BUS_ADDRESS"].endswith("/bus")
 
 
+def test_gnome_overview_property_parser() -> None:
+    assert parse_overview_active("(<true>,)") is True
+    assert parse_overview_active("(<false>,)") is False
+    with pytest.raises(ValueError):
+        parse_overview_active("()")
+
+
 def test_dsi_rotation_yields_landscape_logical_resolution() -> None:
     text = "[(0, 0, 1.0, uint32 1, true, [('DSI-1', 'unknown', 'unknown', 'unknown')])]"
     assert parse_mutter_state(text, physical_width=720, physical_height=1280) == (
@@ -149,6 +156,7 @@ def test_structured_player_stats_override_debug_log_messages() -> None:
         '"last_reported_fps": 29.9, "maximum_reported_fps": null}\n'
     )
     assert parse_fps_messages(text)["rendered_frames"] == 42
+    assert decode_error_lines(text) == []
 
 
 def test_wayland_fullscreen_is_only_applied_after_first_frame() -> None:

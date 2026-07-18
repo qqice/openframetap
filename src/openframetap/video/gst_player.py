@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import signal
 import sys
 import time
@@ -69,6 +70,8 @@ def run(path: Path) -> int:
 
     stop_requested = False
     fullscreen_applied = False
+    first_frame_reported = False
+    maximum_reported_fps: float | None = None
     error_message: str | None = None
     eos = False
     started_ns = time.monotonic_ns()
@@ -94,6 +97,28 @@ def run(path: Path) -> int:
     try:
         while not stop_requested:
             frames = _integer_property(fps_sink, "frames-rendered")
+            if frames > 0 and not first_frame_reported:
+                first_frame_reported = True
+                print(
+                    EVENT_PREFIX
+                    + json.dumps(
+                        {
+                            "event": "first_frame_observed",
+                            "frames_rendered": frames,
+                            "monotonic_ns": time.monotonic_ns(),
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+            try:
+                last_message = str(fps_sink.get_property("last-message") or "")
+            except TypeError:
+                last_message = ""
+            match = re.search(r"(?:current|fps):\s*([\d.]+)", last_message)
+            if match:
+                current_fps = float(match.group(1))
+                maximum_reported_fps = max(maximum_reported_fps or 0.0, current_fps)
             if should_apply_fullscreen(
                 requested=fullscreen_requested,
                 already_applied=fullscreen_applied,
@@ -143,7 +168,7 @@ def run(path: Path) -> int:
             "rendered_frames": rendered,
             "dropped_frames": dropped,
             "last_reported_fps": rendered / elapsed,
-            "maximum_reported_fps": None,
+            "maximum_reported_fps": maximum_reported_fps,
             "fullscreen_requested": fullscreen_requested,
             "fullscreen_applied": fullscreen_applied,
             "waylandsink_fullscreen_property": bool(
