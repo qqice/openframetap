@@ -1,0 +1,41 @@
+{
+  "fixture_schema": 1,
+  "source": {
+    "repository": "xaionaro/reverse-engineering-dji",
+    "commit": "5c9278ff0b53bbe0d03ea6c830aab13ac775871e",
+    "path": "mimo/ble/message_types.md",
+    "source_sha256": "34a041ebc5a6f59994728c0ab6555b1aaa0689af513f2864ad88e9bfdc9e73b7",
+    "source_timestamp": null,
+    "timestamp_note": "packet timestamp was not published in the source extract"
+  },
+  "frames": [
+    {
+      "name": "pairing_started_notification",
+      "source_frame_number": 596,
+      "direction": "Pocket-to-app FFF4 notification",
+      "hex": "554904930102411000028001048000010000000000000000000000000000000000000000000000000000000246000001000000000000000000000000000000000000000001000017fc",
+      "expected": {"length": 73, "sender": 1, "receiver": 2, "sequence": 16656, "flags": 0, "cmd_set": 2, "cmd_id": 128}
+    },
+    {
+      "name": "gimbal_status_candidate",
+      "source_frame_number": 597,
+      "direction": "Pocket-to-app FFF4 notification",
+      "hex": "553e044b04021913000405e3060000ffff80000000000179320500a92a0000cefcf4ffac1f983cef9550bff430143ff221d63c00000000010000000014a9",
+      "expected": {"length": 62, "sender": 4, "receiver": 2, "sequence": 6419, "flags": 0, "cmd_set": 4, "cmd_id": 5}
+    },
+    {
+      "name": "unknown_gimbal_notification",
+      "source_frame_number": 599,
+      "direction": "Pocket-to-app FFF4 notification",
+      "hex": "550e046604026b1300041c48e5e2",
+      "expected": {"length": 14, "sender": 4, "receiver": 2, "sequence": 27411, "flags": 0, "cmd_set": 4, "cmd_id": 28}
+    },
+    {
+      "name": "device_info_candidate",
+      "source_frame_number": 658,
+      "direction": "Pocket-to-app FFF4 notification",
+      "hex": "554d04a84802220340008168673231320000000000000000000000000000000000000000000000000000000208000000000000020800000000000000000000000000000000000000000000dc0e",
+      "expected": {"length": 77, "sender": 72, "receiver": 2, "sequence": 8707, "flags": 64, "cmd_set": 0, "cmd_id": 129}
+    }
+  ]
+}
