@@ -3,8 +3,10 @@ artifacts/**
 !artifacts/
 !artifacts/local/
 !artifacts/remote/
+!artifacts/sanitized/
 !artifacts/local/.gitkeep
 !artifacts/remote/.gitkeep
+!artifacts/sanitized/.gitkeep
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -17,4 +19,3 @@ htmlcov/
 .env
 config/*.env
 !config/example.env
-
