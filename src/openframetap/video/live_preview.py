@@ -84,12 +84,14 @@ def run_preview(
     samples = []
     timed_out = False
     interrupted = False
+    runtime_argv = list(spec.argv)
+    runtime_argv.insert(2, "-v")
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
-            list(spec.argv), stdout=log, stderr=subprocess.STDOUT, text=True, env=env
+            runtime_argv, stdout=log, stderr=subprocess.STDOUT, text=True, env=env
         )
         timeline.process_started_ns = time.monotonic_ns()
-        registry.register("preview", process, list(spec.argv))
+        registry.register("preview", process, runtime_argv)
         sampler = ProcessMetrics(process.pid)
         deadline = time.monotonic() + duration_seconds
         try:
@@ -128,7 +130,11 @@ def run_preview(
     errors = [
         line
         for line in log_text.splitlines()
-        if re.search(r"\b(error|not-negotiated|failed)\b", line, re.IGNORECASE)
+        if re.search(
+            r"\bERROR\b|not-negotiated|No valid frames|Error while opening decoder|decoder[^\n]*failed",
+            line,
+            re.IGNORECASE,
+        )
     ]
     payload = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),

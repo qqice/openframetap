@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -132,3 +133,12 @@ last-message = rendered: 56, dropped: 5, current: 30.00, average: 27.77
     assert payload["rendered_frames"] == 56
     assert payload["dropped_frames"] == 5
     assert payload["last_reported_fps"] == 30.0
+
+
+def test_expected_flv_eos_warning_is_not_a_decode_error() -> None:
+    line = "failed when pulling 4 bytes from offset 1234: eos"
+    assert not re.search(
+        r"\bERROR\b|not-negotiated|No valid frames|Error while opening decoder|decoder[^\n]*failed",
+        line,
+        re.IGNORECASE,
+    )
