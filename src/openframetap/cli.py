@@ -196,6 +196,13 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="discover the active local Wayland session and DSI layout"
     )
     display_doctor.add_argument("--output-dir", type=Path, required=True)
+    tools_parser = subcommands.add_parser("tools", help="local physical-experiment helpers")
+    tools_commands = tools_parser.add_subparsers(dest="tools_command", required=True)
+    latency_pattern = tools_commands.add_parser(
+        "latency-pattern", help="show a high-contrast counter for glass-to-glass recording"
+    )
+    latency_pattern.add_argument("--duration", type=int, default=60)
+    latency_pattern.add_argument("--windowed", action="store_true")
 
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
@@ -400,6 +407,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "tools" and args.tools_command == "latency-pattern":
+        if not 1 <= args.duration <= 600:
+            print("LATENCY_PATTERN_FAILED: --duration must be 1..600 seconds")
+            return 2
+        from openframetap.tools.latency_pattern import run_latency_pattern
+
+        run_latency_pattern(
+            fullscreen=not args.windowed, duration_seconds=args.duration
+        )
+        return 0
     if args.command == "video" and args.video_command == "doctor":
         from openframetap.video.decoder_probe import run_video_doctor
 

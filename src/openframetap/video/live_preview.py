@@ -104,6 +104,9 @@ def run_preview(
     samples = []
     timed_out = False
     interrupted = False
+    screenshot_path = private_dir / "screenshots" / "wayland-preview.png"
+    screenshot_attempted = False
+    screenshot_error = None
     runtime_argv = list(spec.argv)
     runtime_argv.insert(2, "-v")
     with log_path.open("w", encoding="utf-8") as log:
@@ -122,6 +125,25 @@ def run_preview(
         try:
             while process.poll() is None:
                 samples.append(sampler.sample())
+                if (
+                    not screenshot_attempted
+                    and time.monotonic() >= deadline - duration_seconds + 3.0
+                ):
+                    screenshot_attempted = True
+                    screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shot = subprocess.run(
+                            ["gnome-screenshot", "-f", str(screenshot_path)],
+                            env=env,
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                            timeout=10,
+                        )
+                        if shot.returncode != 0:
+                            screenshot_error = shot.stderr.strip() or f"exit {shot.returncode}"
+                    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+                        screenshot_error = str(exc)
                 log.flush()
                 if timeline.sink_caps_observed_ns is None:
                     try:
@@ -174,6 +196,12 @@ def run_preview(
         "startup_timeline": timeline.to_dict(),
         "latency": parse_latency_tracer(log_text),
         "audio_output_enabled": False,
+        "screenshot": {
+            "attempted": screenshot_attempted,
+            "saved": screenshot_path.is_file(),
+            "private_file": "screenshots/wayland-preview.png" if screenshot_path.is_file() else None,
+            "error": screenshot_error,
+        },
         "ble_connection_status": "not_required_for_media_pull",
         "cleanup": {
             "preview_registry_empty": "preview" not in registry.load(),
@@ -205,6 +233,8 @@ def run_preview(
     checks = [pipeline_path, log_path, metrics_path, private_summary]
     if (private_dir / "mediamtx-status.json").exists():
         checks.append(private_dir / "mediamtx-status.json")
+    if screenshot_path.is_file():
+        checks.append(screenshot_path)
     (private_dir / "checksums.sha256").write_text(
         "".join(f"{_sha256(path)}  {path.name}\n" for path in checks), encoding="ascii"
     )

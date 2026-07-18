@@ -17,6 +17,7 @@ from openframetap.video.pipelines import (
     offline_pipeline,
     profile_parameters,
 )
+from openframetap.tools.latency_pattern import pattern_state
 
 
 MPP_INSPECT = """
@@ -156,3 +157,11 @@ def test_latency_tracer_is_labeled_internal_not_glass_to_glass() -> None:
     assert payload["internal_latency_available"]
     assert payload["average_ms"] == 15.0
     assert payload["glass_to_glass_measured"] is False
+
+
+def test_latency_pattern_has_frame_id_time_and_flash_state() -> None:
+    first = pattern_state(0, 12_345_678_000)
+    later = pattern_state(15, 12_595_678_000)
+    assert first.milliseconds == 12_345
+    assert first.white is True
+    assert later.white is False
