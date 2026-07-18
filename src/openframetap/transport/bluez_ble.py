@@ -272,6 +272,13 @@ class BluezBleTransport:
         """Validate policy and decoded command metadata before any FFF5 write."""
 
         assert_send_allowed(command, authorization)
+        digest = hashlib.sha256(raw).hexdigest()
+        if (
+            authorization is not None
+            and authorization.approved_frame_sha256 is not None
+            and digest != authorization.approved_frame_sha256
+        ):
+            raise ValueError("frame SHA-256 does not match the explicit authorization")
         frame = decode_duml_frame(raw)
         if not (frame.crc8_valid and frame.crc16_valid):
             raise ValueError("refusing to send a frame with invalid CRC")
@@ -294,7 +301,7 @@ class BluezBleTransport:
                 "event": "fff5_frame_write_start",
                 "command": command.name,
                 "authorization_reference": authorization.approval_reference,
-                "frame_sha256": hashlib.sha256(raw).hexdigest(),
+                "frame_sha256": digest,
                 "frame_hex": raw.hex(),
                 "chunk_count": len(chunks),
                 "att_mtu_source": "bleak_public_property",

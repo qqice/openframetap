@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 
 class CommandRejected(PermissionError):
     pass
+
+
+EXPLICIT_DENIED_FRAME_OVERRIDES = {
+    # Owner-approved 2026-07-19 recovery stage. Generic 02/8E traffic remains
+    # denied; only this reviewed, CRC-valid wire image may cross the override.
+    "prepare_stream_transport": (
+        "624c92dc2ce9364346e1b5e548f8be260b9f21e35fca20503b38315c90999286"
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +46,8 @@ class SendAuthorization:
     purpose: str
     approval_reference: str
     approved_at: str
+    explicitly_approved_denied_commands: frozenset[str] = field(default_factory=frozenset)
+    approved_frame_sha256: str | None = None
 
     @classmethod
     def pairing(cls, *, approval_reference: str) -> "SendAuthorization":
@@ -62,6 +73,39 @@ class SendAuthorization:
             purpose=purpose,
             approval_reference=approval_reference,
             approved_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    @classmethod
+    def explicit_single_frame(
+        cls,
+        command_name: str,
+        *,
+        frame_sha256: str,
+        purpose: str,
+        approval_reference: str,
+        allow_denied_command: bool = False,
+    ) -> "SendAuthorization":
+        digest = frame_sha256.lower()
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            raise ValueError("frame_sha256 must be 64 hexadecimal characters")
+        if allow_denied_command and EXPLICIT_DENIED_FRAME_OVERRIDES.get(command_name) != digest:
+            raise CommandRejected(
+                f"{command_name} does not have an exact-frame denied-command override"
+            )
+        base = cls.single_command(
+            command_name, purpose=purpose, approval_reference=approval_reference
+        )
+        return cls(
+            allowed_command_names=base.allowed_command_names,
+            purpose=base.purpose,
+            approval_reference=base.approval_reference,
+            approved_at=base.approved_at,
+            explicitly_approved_denied_commands=(
+                frozenset({command_name}) if allow_denied_command else frozenset()
+            ),
+            approved_frame_sha256=digest,
         )
 
 
@@ -160,10 +204,12 @@ def get_command_definition(name: str) -> CommandDefinition:
 def assert_send_allowed(command: CommandDefinition, authorization: SendAuthorization | None) -> None:
     """Fail closed: no authorization means no characteristic write."""
 
-    if command.danger or not command.allowed_in_current_phase:
-        raise CommandRejected(f"{command.name} is denied in the current phase: {command.danger}")
     if authorization is None:
         raise CommandRejected(f"{command.name} requires explicit user authorization")
+    if (command.danger or not command.allowed_in_current_phase) and command.name not in (
+        authorization.explicitly_approved_denied_commands
+    ):
+        raise CommandRejected(f"{command.name} is denied in the current phase: {command.danger}")
     if command.name not in authorization.allowed_command_names:
         raise CommandRejected(
             f"authorization {authorization.approval_reference!r} does not allow {command.name}"
