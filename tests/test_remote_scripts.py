@@ -78,6 +78,7 @@ def test_rsync_deploy_has_required_exclusions(tmp_path: Path) -> None:
     for exclusion in (
         ".git/",
         ".venv/",
+        "runtime/",
         "artifacts/",
         "__pycache__/",
         "*.pcap",

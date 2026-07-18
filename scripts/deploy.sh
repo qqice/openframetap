@@ -9,6 +9,7 @@ SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
 RSYNC_EXCLUDES=(
   --exclude=.git/
   --exclude=.venv/
+  --exclude=runtime/
   --exclude=artifacts/
   --exclude=__pycache__/
   --exclude='*.pyc'
@@ -25,6 +26,8 @@ TAR_EXCLUDES=(
   --exclude='./.git/*'
   --exclude='./.venv'
   --exclude='./.venv/*'
+  --exclude='./runtime'
+  --exclude='./runtime/*'
   --exclude='./artifacts'
   --exclude='./artifacts/*'
   --exclude='*/__pycache__'
@@ -55,7 +58,7 @@ else
   (cd "$ROOT_DIR" && git ls-files --cached --others --exclude-standard | \
     tar "${TAR_EXCLUDES[@]}" -cf - -T -) | \
     "$SSH_BIN" "${SSH_OPTIONS[@]}" "$TARGET" \
-      "set -eu; tar -xf - -C $REMOTE_DIR/.deploy-stage; cd $REMOTE_DIR; find . -mindepth 1 -maxdepth 1 ! -name .venv ! -name artifacts ! -name .deploy-stage -exec rm -rf -- {} +; cp -a .deploy-stage/. .; rm -rf .deploy-stage"
+      "set -eu; tar -xf - -C $REMOTE_DIR/.deploy-stage; cd $REMOTE_DIR; find . -mindepth 1 -maxdepth 1 ! -name .venv ! -name artifacts ! -name runtime ! -name .deploy-stage -exec rm -rf -- {} +; cp -a .deploy-stage/. .; rm -rf .deploy-stage"
   status=$?
 fi
 

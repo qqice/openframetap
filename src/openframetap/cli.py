@@ -113,6 +113,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--analysis-location", default=os.environ.get("OPENFRAMETAP_ANALYSIS_LOCATION", "local")
     )
 
+    video = subcommands.add_parser("video", help="user-space RTMP ingest tools")
+    video_commands = video.add_subparsers(dest="video_command", required=True)
+    video_server = video_commands.add_parser("server", help="MediaMTX lifecycle")
+    video_server_commands = video_server.add_subparsers(
+        dest="video_server_command", required=True
+    )
+    video_server_commands.add_parser("doctor", help="read-only LAN audit plus start/stop test")
+    video_server_commands.add_parser("start", help="start the user-owned RTMP listener")
+    video_server_commands.add_parser("stop", help="stop only the PID owned by this runtime")
+    video_server_commands.add_parser("status", help="report listener and PID status")
+
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
     pair = pocket3_commands.add_parser("pair", help="DJI application-layer pairing")
@@ -169,6 +180,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "video" and args.video_command == "server":
+        from openframetap.network.interfaces import NetworkPreflightError
+        from openframetap.video.rtmp_server import make_server, server_doctor
+
+        try:
+            if args.video_server_command == "doctor":
+                payload = server_doctor(lifecycle_check=True)
+                ok = bool(payload.get("lifecycle_check", {}).get("started")) and bool(
+                    payload.get("lifecycle_check", {}).get("stopped")
+                )
+            else:
+                server = make_server()
+                if args.video_server_command == "start":
+                    payload = server.start().to_dict()
+                    ok = payload["state"] == "running"
+                elif args.video_server_command == "stop":
+                    payload = server.stop().to_dict()
+                    ok = payload["state"] == "stopped"
+                else:
+                    payload = server.status().to_dict()
+                    ok = payload["state"] in {"running", "stopped"}
+        except (FileNotFoundError, NetworkPreflightError, RuntimeError, TimeoutError) as exc:
+            print(f"RTMP_SERVER_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if ok else 1
     if args.command == "ble" and args.ble_command == "scan":
         if args.seconds <= 0:
             raise SystemExit("--seconds must be positive")

@@ -7,6 +7,9 @@ REMOTE_ARTIFACTS="$ROOT_DIR/artifacts/remote"
 TARGET="${ROCK4D_SSH_HOST:-${OPENFRAMETAP_SSH_TARGET:-qqice@100.125.223.67}}"
 REMOTE_DIR="${OPENFRAMETAP_REMOTE_DIR:-~/openframetap-runtime}"
 POCKET3_ADDRESS="${POCKET3_BLE_ADDRESS:-E4:7A:2C:36:DC:FC}"
+MEDIAMTX_VERSION="v1.18.2"
+MEDIAMTX_SHA256="c78aa7a1bdab94b2b02be364661f17802143215dba37e1fa67c3e0849248b485"
+MEDIAMTX_CACHE="${OPENFRAMETAP_MEDIAMTX_CACHE:-$ROOT_DIR/artifacts/private/tool-cache/mediamtx/$MEDIAMTX_VERSION}"
 SSH_BIN="${OPENFRAMETAP_SSH_BIN:-ssh}"
 SCP_BIN="${OPENFRAMETAP_SCP_BIN:-scp}"
 SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
@@ -143,6 +146,11 @@ Usage:
   ./scripts/remote.sh pocket3-telemetry [seconds]
   ./scripts/remote.sh pocket3-experiment [seconds]
   ./scripts/remote.sh analyze-telemetry <pocket3-experiment-directory>
+  ./scripts/remote.sh rtmp-install
+  ./scripts/remote.sh rtmp-doctor
+  ./scripts/remote.sh rtmp-start
+  ./scripts/remote.sh rtmp-status
+  ./scripts/remote.sh rtmp-stop
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
   ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
@@ -157,6 +165,59 @@ case "$action" in
     ;;
   deploy)
     deploy
+    ;;
+  rtmp-install)
+    binary="$MEDIAMTX_CACHE/mediamtx"
+    archive="$MEDIAMTX_CACHE/mediamtx_${MEDIAMTX_VERSION}_linux_arm64.tar.gz"
+    [[ -f "$binary" && -f "$archive" ]] || {
+      echo "MediaMTX cache missing under: $MEDIAMTX_CACHE" >&2
+      exit 2
+    }
+    actual_sha256="$(sha256sum "$archive" | awk '{print tolower($1)}')"
+    [[ "$actual_sha256" == "$MEDIAMTX_SHA256" ]] || {
+      echo 'MediaMTX archive SHA-256 mismatch; refusing installation.' >&2
+      exit 5
+    }
+    deploy || exit $?
+    run_remote rtmp-install-prepare "set -eu
+mkdir -p $REMOTE_DIR/runtime/rtmp/bin
+chmod 700 $REMOTE_DIR/runtime $REMOTE_DIR/runtime/rtmp $REMOTE_DIR/runtime/rtmp/bin"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    printf '[openframetap] Copy verified MediaMTX %s binary to user runtime\n' "$MEDIAMTX_VERSION"
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$binary" \
+      "$TARGET:${REMOTE_DIR#\~/}/runtime/rtmp/bin/mediamtx.new" || exit $?
+    run_remote rtmp-install-finalize "set -eu
+cd $REMOTE_DIR
+actual=\$(sha256sum runtime/rtmp/bin/mediamtx.new | awk '{print \$1}')
+printf 'MEDIAMTX_BINARY_SHA256=%s\\n' \"\$actual\"
+mv runtime/rtmp/bin/mediamtx.new runtime/rtmp/bin/mediamtx
+chmod 700 runtime/rtmp/bin/mediamtx
+runtime/rtmp/bin/mediamtx --version"
+    ;;
+  rtmp-doctor)
+    deploy || exit $?
+    run_remote rtmp-doctor "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server doctor"
+    ;;
+  rtmp-start)
+    deploy || exit $?
+    run_remote rtmp-start "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server start"
+    ;;
+  rtmp-status)
+    deploy || exit $?
+    run_remote rtmp-status "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server status"
+    ;;
+  rtmp-stop)
+    deploy || exit $?
+    run_remote rtmp-stop "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap video server stop"
     ;;
   doctor)
     deploy || exit $?
