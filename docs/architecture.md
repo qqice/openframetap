@@ -24,14 +24,14 @@ Existing five-point touch input
 Future joystick/buttons and gimbal controller
 ```
 
-The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration, DUML codec, stream reassembly, passive FFF4 notification capture, conservative telemetry recording, application-layer pairing state machine, human event marker, and immutable-evidence analysis now exist. The experiment and analysis code is offline-tested; a new controlled physical experiment remains explicitly user-gated. Video, Wi-Fi provisioning, UI, and control remain roadmap items and were not entered.
+The repository/runtime boundary, platform audit, BLE discovery/GATT enumeration, DUML codec, stream reassembly, passive FFF4 notification capture, conservative telemetry recording, application-layer pairing state machine, human event marker, and immutable-evidence analysis now exist. A user-space RTMP receiver, LAN-only address selection, secret-safe evidence split, local RTMP publish/readback self-test, and a persistent fail-closed Pocket 3 livestream proposal workflow now also exist. The first prepare frame remains offline and user-gated; Wi-Fi provisioning, Pocket-originated video, UI, and control have not been executed.
 
 ## Layer boundaries
 
 - `transport`: BlueZ/Bleak discovery, connection lifecycle, FFF4 subscription, timestamped bytes, human-gated single-frame FFF5 transmission, advertisement preservation, and GATT metadata enumeration.
 - `protocol`: DUML CRC, structured framing, stream reassembly, command metadata, transaction sequence, and deny/allow policy; it has no Bleak dependency and does not own model selection.
 - `device profile`: model fingerprints and capability tables for Pocket 3 versus Pocket 4/4P. Unknown identifiers remain raw and tolerated.
-- `video`: future RTMP/session ingestion and decoder selection.
+- `video`: MediaMTX lifecycle, LAN publish/readback self-test, ffprobe normalization, sample remux, software decode evidence, and future Pocket-originated RTMP ingestion. It has no BLE dependency.
 - `display`: the existing DRM/DSI stack and a future non-destructive preview surface.
 - `input`: existing touch plus future joystick/button events and fail-safe normalization.
 - `application state`: connection and DJI application-layer pairing state now; telemetry, video, recording, and control state later.
@@ -43,6 +43,6 @@ Model checks belong only in the device-profile/capability layer. BLE transport, 
 
 ## Safety invariants
 
-Passive listen performs only BLE connection and FFF4 CCCD subscription. It neither writes FFF5 nor auto-ACKs incoming DUML requests. A pairing frame can reach the FFF5 method only after the owning user types its complete SHA-256. The single-frame wrapper writes at most one frame; the session-bound wrapper keeps one BLE connection but requires a new interactive full-SHA confirmation before every frame. Notification callbacks only record/enqueue data and cannot send. The offline state machine produces `propose_*` actions rather than transport actions. Wi-Fi provisioning, AP/P2P setup, video, camera commands, and gimbal movement remain prohibited. A later control layer must enforce command zeroing, maximum angular velocity/duration, and a 300–500 ms heartbeat-loss stop before motion is enabled.
+Passive listen performs only BLE connection and FFF4 CCCD subscription. It neither writes FFF5 nor auto-ACKs incoming DUML requests. A frame can reach the FFF5 method only after a fixed proposal passes command/address/SHA/CRC/schema checks and the owning user types its complete SHA-256. Authorization is exactly one command name and cannot authorize a follow-up category. Notification callbacks only record/enqueue data and cannot send. The offline state machine produces proposals rather than transport actions. AP/P2P setup, camera capture, gimbal movement, DSI preview, and hardware decode remain prohibited. A later control layer must enforce command zeroing, maximum angular velocity/duration, and a 300–500 ms heartbeat-loss stop before motion is enabled.
 
 The experiment session calls only connect, ATT-MTU acquisition, FFF4 subscribe, and disconnect. It records CCCD and FFF5 counters separately and treats any nonzero FFF5 counter as a safety failure. Event input is local to the ROCK 4D TTY and cannot select a DUML command. Analysis checks the raw SHA-256 manifest before producing output and again afterward.

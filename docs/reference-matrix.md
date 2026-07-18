@@ -55,6 +55,23 @@ This matrix separates public-source conclusions from OpenFrameTap capture eviden
 | `0x400746` pairing approval request | Public Mimo capture identifies it immediately after Pocket confirmation; local hardware emitted payload `01` ten times after the user's screen action. | High | Record Pocket-screen confirmation; never auto-ACK. |
 | `0x000280` source-labeled pairing-started message | The published reverse-engineering fixture labels this family as pairing started, but the final local session captured it 643 times before and after an explicit `already_paired` response. | Low; local evidence rejects the pairing semantic | Preserve the raw payload as `camera_status_02_80_candidate`; do not expose a pairing-started state. |
 
+## Pocket 3 livestream command matrix
+
+| Command | Source/target and wire command | Payload | Agreement and conflict | Confidence | Local Pocket status |
+| --- | --- | --- | --- | --- | --- |
+| Prepare livestream | App `02` -> video `08`, `40/02/E1` | `1A` | node-osmo, Moblin, and djictl agree; public Mimo traffic has `C0/02/E1 payload 00` response evidence. | High reference confidence | Offline proposal only; never sent locally. |
+| Prepare transport stage2 | App `02` -> video `08`, `40/02/8E` | `00 01 1C 00` | djictl and a public Mimo request capture agree. node-osmo/Moblin Pocket 3 flows omit it. | Medium; flow conflict | Explicitly denied pending separate evidence and authorization. |
+| Connect Wi-Fi | App `02` -> Wi-Fi `07`, `40/07/47` | packed SSID + packed PSK | node-osmo, Moblin, and djictl agree on request packing. Public/reference response lengths conflict. | High request schema; medium response schema | Not proposed or sent; sensitive private-only category. |
+| Configure live stream | App `02` -> video `08`, `40/08/78` | fixed quality fields + packed RTMP URL | node-osmo, Moblin, and djictl agree on ordinary Pocket 3 payload structure. | High reference confidence | Not proposed or sent; stream key is private-only. |
+| Start transport stage | App `02` -> video `08`, `40/02/8E` | `01 01 1A 00 01 01` | djictl sends it; current node-osmo/Moblin Pocket 3 flow does not. | Low; flow conflict | Explicitly denied pending separate evidence and authorization. |
+| Stop live stream | App `02` -> video `08`, `40/02/8E` | `01 01 1A 00 01 02` | node-osmo and Moblin agree, but no local Pocket evidence exists and protocol stop may not be needed. | Medium reference confidence | Explicitly denied; requires separate proposal and authorization if ever needed. |
+
+The reference-derived prepare frame is
+`550e046602088c124002e11a0cfe`, SHA-256
+`e0286b3d9e63e248f0792c8ae4055587484aba8a05ba154c451c8ae987cc2ad6`.
+CRC8/CRC16 and local encode/decode round-trip are valid. This is offline
+evidence, not a statement that the local Pocket accepted it.
+
 ## Pairing state graph
 
 ```text
