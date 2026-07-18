@@ -49,7 +49,7 @@ rtmpsrc
 - 【实机事实】 The demux audio pad is linked to a bounded `fakesink` branch because the publisher can expose AAC before video. No ALSA, PulseAudio, or PipeWire output is opened.
 - 【实机事实】 The application connects to the existing GNOME Wayland session. It never creates a compositor or changes `monitors.xml`.
 - 【实机事实】 `waylandsink` must receive its fullscreen property after the first frame creates a Wayland surface. The player temporarily hides an already-active GNOME Overview, applies fullscreen, and restores the prior Overview state on exit.
-- 【实机事实】 The final 1280x720 screenshot filled the logical DSI output with correct landscape orientation and aspect, without top bar, Dock, Overview, application scaling controls, or forced rotation.
+- 【实机事实】 The final 1280x720 screenshots filled the logical DSI output with correct landscape orientation and aspect, without top bar, Dock, Overview, application scaling controls, or forced rotation.
 - 【统计观察】 No `videoconvert`, `videoscale`, or RGA stage was needed. The source and logical output are both 1280x720; the screenshot supports one-to-one presentation, although compositor-internal implementation details are not directly measured.
 
 The RTSP reader elements were present, but a separate RTSP preview was not selected because direct RTMP already avoided a relay/depay stage and passed the stability target. HLS is rejected by code as a low-latency default. KMS was skipped because Wayland succeeded and taking DRM master from GNOME would add recovery risk without evidence of a material benefit.
@@ -73,7 +73,13 @@ The RTSP reader elements were present, but a separate RTSP preview was not selec
 - 【实机事实】 Timeout cleanup removed the owned preview PID and left the process registry empty. A prior SSH-reset test exposed an orphan-risk and private-URL registry leak; parent-death signaling and argv redaction were added and revalidated.
 - 【待验证假设】 The full camera-to-glass delay remains unknown. GStreamer tracer values begin inside the receiver and exclude camera exposure, Pocket encoding, and upstream buffering.
 
-Evidence: `live-preview-20260718T215731Z`; final true-fullscreen evidence: `live-preview-20260718T222723Z`.
+Evidence: `live-preview-20260718T215731Z`; final offline/true-fullscreen evidence: `preview-file-20260718T223437Z` and `live-preview-20260718T223954Z`.
+
+## User-space installation and security note
+
+- 【实机事实】 After an apt simulation reported 0 upgraded, 87 newly installed, 0 removed, and 3 held back, the phase installed only `ffmpeg` `7:6.1.1-3ubuntu5+git240504.09cd2a2~noble`, `gstreamer1.0-gl` `1.24.2-1+rkrga`, `gstreamer1.0-libav` `1.24.1-1build1`, and `gstreamer1.0-plugins-bad` `1.24.2-1ubuntu4` with `--no-install-recommends`. No reboot or service restart was required.
+- 【实机事实】 An early process-status implementation exposed the private stream path once in a local task log. Registry and status argv are now redacted and the child receives only a private pipeline-file path.
+- 【捕获推断】 The old stream key should be treated as compromised if those local logs leave the trusted workstation. Rotation requires a separately controlled fixed-proposal update and was not mixed into this media-validation phase.
 
 ## Commands
 
