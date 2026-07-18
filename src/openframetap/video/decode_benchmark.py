@@ -128,7 +128,7 @@ def run_decode_benchmark(input_path: Path, output_dir: Path) -> dict:
             input_path,
             decoder=decoder,
             sink="fakesink",
-            profile=PipelineProfile.AGGRESSIVE,
+            profile=PipelineProfile.STABLE,
         )
         argv = list(spec.argv)
         argv.insert(2, "-v")

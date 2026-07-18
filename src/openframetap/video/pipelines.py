@@ -56,6 +56,7 @@ def _sink_tokens(sink: str, *, fullscreen: bool, sync: str) -> tuple[str, ...]:
             "fpsdisplaysink",
             "text-overlay=false",
             "video-sink=fakesink",
+            "silent=false",
             "fps-update-interval=50",
             f"sync={sync}",
         )
