@@ -10,8 +10,8 @@ frame_hex="${4:-}"
 command_name="${5:-}"
 confirmed_sha256="${6:-}"
 required_incoming_hex="${7:-}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" ]] || {
-  echo 'operation must be listen, telemetry, pair-status, or manual-frame' >&2
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" ]] || {
+  echo 'operation must be listen, telemetry, pair-status, manual-frame, or manual-pair-session' >&2
   exit 2
 }
 [[ -n "$address" ]] || { echo 'BLE address is required' >&2; exit 2; }
@@ -23,6 +23,7 @@ case "$operation" in
   telemetry) prefix="pocket3-telemetry" ;;
   pair-status) prefix="pocket3-pair-status" ;;
   manual-frame) prefix="pocket3-manual-frame" ;;
+  manual-pair-session) prefix="pocket3-manual-pair-session" ;;
 esac
 stem="$prefix-$stamp"
 output_dir="artifacts/$stem"
@@ -132,6 +133,11 @@ case "$operation" in
       manual_args+=(--require-incoming-hex "$required_incoming_hex")
     fi
     OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" "${manual_args[@]}" \
+      2>&1 | tee "$session_output"
+    ;;
+  manual-pair-session)
+    OPENFRAMETAP_USER_INITIATED=1 "$PYTHON_BIN" -m openframetap pocket3 pair manual-session \
+      "$address" --telemetry-seconds "$seconds" --output-dir "$output_dir" \
       2>&1 | tee "$session_output"
     ;;
 esac

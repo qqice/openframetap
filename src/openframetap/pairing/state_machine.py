@@ -112,6 +112,11 @@ class PairingStateMachine:
         self.last_error = "cancelled by user"
         return PairingEvent("stop", self.last_error)
 
+    def fail_unexpected(self, detail: str) -> PairingEvent:
+        """Record a protocol/runtime mismatch without exposing private transitions."""
+
+        return self._fail(detail)
+
     def _fail(self, detail: str) -> PairingEvent:
         self.state = PairingState.FAILED
         self.last_error = detail

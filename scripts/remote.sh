@@ -47,6 +47,30 @@ run_remote() {
   return "$status"
 }
 
+run_remote_interactive() {
+  local label="$1"
+  local command_text="$2"
+  local stamp log_dir stdout_file stderr_file status
+  stamp="$(timestamp)"
+  log_dir="$LOCAL_ARTIFACTS/${label}-${stamp}"
+  stdout_file="$log_dir/stdout.txt"
+  stderr_file="$log_dir/stderr.txt"
+  mkdir -p "$log_dir"
+  print_target
+  printf '[openframetap] Interactive remote command: %s\n' "$command_text"
+  printf '%s\n' "$command_text" >"$log_dir/command.txt"
+  printf '%s\n' "$TARGET" >"$log_dir/target.txt"
+  "$SSH_BIN" "${SSH_OPTIONS[@]}" -tt "$TARGET" "$command_text" \
+    > >(tee "$stdout_file") \
+    2> >(tee "$stderr_file" >&2)
+  status=$?
+  printf '%s\n' "$status" >"$log_dir/exit-status.txt"
+  printf '[openframetap] Exit status: %s\n' "$status"
+  printf '[openframetap] Local log: %s\n' "$log_dir"
+  LAST_LOG_DIR="$log_dir"
+  return "$status"
+}
+
 deploy() {
   local stamp log_dir status
   stamp="$(timestamp)"
@@ -118,6 +142,7 @@ Usage:
   ./scripts/remote.sh pocket3-pair
   ./scripts/remote.sh pocket3-telemetry [seconds]
   ./scripts/remote.sh pocket3-send-frame <frame.bin> <command-name> [listen-seconds] [required-incoming.bin]
+  ./scripts/remote.sh pocket3-manual-pair-session [telemetry-seconds]
   ./scripts/remote.sh setup-python
 EOF
 }
@@ -280,6 +305,32 @@ bash scripts/capture-pocket3.sh manual-frame '$POCKET3_ADDRESS' '$seconds' '$fra
     status=$?
     stem="$(extract_stem ARTIFACT_DIR)"
     [[ -n "$stem" ]] || { echo '[openframetap] Missing manual-frame artifact marker' >&2; exit 3; }
+    pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
+    exit "$status"
+    ;;
+  pocket3-manual-pair-session)
+    seconds="${2:-60}"
+    [[ $# -le 2 ]] || { usage >&2; exit 2; }
+    [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'seconds must be a positive integer' >&2; exit 2; }
+    [[ -t 0 ]] || {
+      echo '[openframetap] Refused: this action requires the device owner at a real terminal.' >&2
+      exit 4
+    }
+    print_target
+    printf '%s\n' '[openframetap] This is the final allowed application-pairing attempt.'
+    printf '%s\n' '[openframetap] Every candidate requires a separate full SHA-256 typed by the owner.'
+    printf '[openframetap] Type RUN to open the interactive session, or anything else to stop: '
+    IFS= read -r start_confirmation
+    [[ "$start_confirmation" == "RUN" ]] || {
+      echo '[openframetap] Cancelled before deployment or BLE connection.' >&2
+      exit 4
+    }
+    deploy || exit $?
+    run_remote_interactive manual-pair-session \
+      "cd $REMOTE_DIR && bash scripts/capture-pocket3.sh manual-pair-session '$POCKET3_ADDRESS' '$seconds'"
+    status=$?
+    stem="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    [[ -n "$stem" ]] || { echo '[openframetap] Missing manual-pair-session artifact marker' >&2; exit 3; }
     pull_dir "artifacts/$stem" "$REMOTE_ARTIFACTS" || exit $?
     exit "$status"
     ;;

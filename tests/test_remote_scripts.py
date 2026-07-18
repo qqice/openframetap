@@ -193,3 +193,22 @@ def test_manual_frame_confirmation_mismatch_never_calls_ssh(tmp_path: Path) -> N
     assert result.returncode == 4
     assert "no deployment or BLE connection was attempted" in result.stderr
     assert "Exit status: 37" not in result.stdout
+
+
+def test_manual_pair_session_requires_a_real_terminal() -> None:
+    env = os.environ.copy()
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(ROOT / "tests/fixtures/fail-ssh.sh")
+    env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
+    result = subprocess.run(
+        [bash_path(), "scripts/remote.sh", "pocket3-manual-pair-session", "1"],
+        cwd=ROOT,
+        env=env,
+        input="RUN\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 4
+    assert "requires the device owner at a real terminal" in result.stderr
+    assert "Exit status: 37" not in result.stdout

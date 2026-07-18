@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sys
 
 from openframetap.ble_scan import load_replay, render_scan, scan, scan_payload
 from openframetap.devices.pocket3 import POCKET3_PROFILE
@@ -14,6 +15,7 @@ from openframetap.pairing.pocket3 import (
     write_pairing_proposal,
     write_pairing_stage1_proposal,
 )
+from openframetap.pairing.manual_session import run_manual_pairing_session
 from openframetap.protocol.commands import PAIRING_COMMANDS
 from openframetap.protocol.duml import decode_duml_frame
 from openframetap.protocol.reassembly import DumlStreamReassembler
@@ -123,6 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
     pair_stage1.add_argument("--source-sha256", required=True)
     pair_stage1.add_argument("--source-note", required=True)
     pair_stage1.add_argument("--proposal-dir", type=Path, default=Path("artifacts/local"))
+    pair_manual = pair_commands.add_parser(
+        "manual-session",
+        help="session-bound pairing with a separate interactive SHA confirmation per frame",
+    )
+    pair_manual.add_argument("address")
+    pair_manual.add_argument("--output-dir", type=Path, required=True)
+    pair_manual.add_argument("--telemetry-seconds", type=float, default=60.0)
 
     telemetry = pocket3_commands.add_parser(
         "telemetry", help="subscribe and record notifications without active queries"
@@ -241,6 +250,34 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, indent=2, ensure_ascii=False))
             print("PROPOSAL ONLY: no BLE connection or write was attempted.")
             return 0
+        if args.pair_command == "manual-session":
+            if os.environ.get("OPENFRAMETAP_USER_INITIATED") != "1" or not sys.stdin.isatty():
+                print(
+                    "REFUSED: manual-session requires the owner-only interactive SSH wrapper "
+                    "and a real terminal."
+                )
+                return 4
+
+            async def confirm_candidate(candidate: dict) -> bool:
+                print("\nCANDIDATE_FRAME_REQUIRES_HUMAN_CONFIRMATION", flush=True)
+                print(json.dumps(candidate, indent=2, ensure_ascii=False), flush=True)
+                prompt = (
+                    f"Type full SHA-256 for {candidate['command']} to write this one frame, "
+                    "or press Enter to stop: "
+                )
+                typed = await asyncio.to_thread(input, prompt)
+                return typed.strip().lower() == candidate["frame_sha256"]
+
+            payload, ok = asyncio.run(
+                run_manual_pairing_session(
+                    args.address,
+                    output_dir=args.output_dir,
+                    confirmation_callback=confirm_candidate,
+                    telemetry_seconds=args.telemetry_seconds,
+                )
+            )
+            print(json.dumps({"output_dir": str(args.output_dir), "summary": payload}, indent=2))
+            return 0 if ok else 1
         if args.address.upper() != (POCKET3_PROFILE.default_address or "").upper():
             address_note = f"proposal target selected by caller: {args.address}"
         else:

@@ -137,6 +137,24 @@ def test_manual_write_cli_refuses_without_local_human_gate(monkeypatch, tmp_path
     assert not any(tmp_path.iterdir())
 
 
+def test_manual_pair_session_cli_refuses_without_real_tty(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("OPENFRAMETAP_USER_INITIATED", "1")
+    status = cli_main(
+        [
+            "pocket3",
+            "pair",
+            "manual-session",
+            "fixture",
+            "--output-dir",
+            str(tmp_path),
+            "--telemetry-seconds",
+            "0",
+        ]
+    )
+    assert status == 4
+    assert not any(tmp_path.iterdir())
+
+
 def test_manual_mode_sends_exactly_one_confirmed_frame_and_no_followup(tmp_path) -> None:
     sent = []
     ready_frame = encode_duml_frame(
