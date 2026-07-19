@@ -72,11 +72,13 @@ def test_requested_disconnect_is_not_an_interruption(monkeypatch) -> None:
             pass
 
         async def stop_notify(self, *_args) -> None:
-            pass
-
-        async def disconnect(self) -> None:
+            # Reproduce BlueZ removing a temporary non-bonded device while
+            # the CCCD disable operation is still in progress.
             self.is_connected = False
             self.disconnected_callback(self)
+
+        async def disconnect(self) -> None:
+            raise AssertionError("already disconnected during stop_notify")
 
     monkeypatch.setitem(sys.modules, "bleak", SimpleNamespace(BleakClient=Client))
     events = []

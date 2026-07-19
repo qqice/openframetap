@@ -292,3 +292,44 @@ Safety decision: retain offset 16 and run the reciprocal yaw-negative pulse.
 An opposite one-unit-or-larger yaw-only change would materially strengthen the
 interpretation. No amplitude increase, yaw repeat, pitch test, `04/50`, or
 alternate fixed field is allowed before that result is analyzed.
+
+## Structured Wi-Fi yaw-negative pulse: 2026-07-20
+
+Private evidence session: `wifi-gimbal-test-20260720-012558`; UDP PCAP SHA-256
+`c1b61cea2965062d433e6eda1f70cbf538baf3d25a80a8d4d4fa76546a7c0228`.
+All original manifest entries passed verification.
+
+【实机事实】The owner again saw no visible motion. The controller sent two
+yaw=1008 frames 102.482 ms apart, surrounded by the same nine center frames.
+It sent no `04/50`, made no FFF5 gimbal write, retained RTMP, and ended in
+`centered` with no CRC, reassembly, socket or watchdog error.
+
+【统计观察】The corrected recorder required UDP gimbal telemetry before arming
+and preserved 33 UDP `04/05` samples. Yaw offset 16 was 17049 before the pulse,
+changed to 17048 about 181 ms after the first negative command, and remained
+there. Pitch did not change. Roll varied naturally between 7 and 8 without a
+directional step. Thus the two independent sessions form the reciprocal pair:
+
+```text
+yaw input 1040 (center + 16) -> candidate 17048 to 17049 (+1)
+yaw input 1008 (center - 16) -> candidate 17049 to 17048 (-1)
+```
+
+【捕获推断】The paired axis-selective, opposite-sign changes provide high
+confidence that Pocket accepts the structured offset-16 yaw command and that
+the profile sign is correct. They do not establish an angle scale. The lack of
+visible motion is consistent with a displacement of only one raw telemetry
+unit, so it is not evidence of command rejection.
+
+【已否定假设】The reported `ble_disconnects=1` was not an active-session loss.
+BTSnoop shows CCCD disable at teardown followed by a local-host HCI disconnect;
+BlueZ began removing the temporary non-bonded device while `stop_notify` was
+still pending. The transport marked teardown intentional too late. It now sets
+that flag before CCCD disable, and a regression test reproduces this callback
+ordering.
+
+Safety decision: do not raise yaw offset and do not repeat yaw. The reciprocal
+yaw requirement is satisfied at the protocol/telemetry level, while visible
+motion remains intentionally below threshold. Proceed to one pitch-positive
+offset-16 pulse with the same center, timing and watchdog limits. Pitch-negative
+remains locked until that evidence is analyzed.

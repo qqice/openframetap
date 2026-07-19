@@ -349,6 +349,11 @@ class BluezBleTransport:
     async def disconnect(self) -> None:
         if not self._client:
             return
+        # BlueZ may begin removing its temporary, non-bonded device while
+        # stop_notify is still awaiting the CCCD write response. Mark the
+        # entire teardown intentional before that operation so its disconnect
+        # callback is not misclassified as an active-session failure.
+        self._disconnect_requested = True
         try:
             if self._subscribed and self._client.is_connected:
                 self._cccd_write_count += 1
@@ -365,7 +370,6 @@ class BluezBleTransport:
                     }
                 )
             if self._client.is_connected:
-                self._disconnect_requested = True
                 await self._client.disconnect()
         finally:
             self.event_handler(
