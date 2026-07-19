@@ -22,6 +22,7 @@ from openframetap.control.gimbal_profile import (
 from openframetap.protocol.dji_wifi import (
     DjiWifiBasicHeader,
     DjiWifiEnvelope,
+    DjiWifiFlowStatus,
     DjiWifiOperatorSequencer,
     DJI_WIFI_FORMAT_NIBBLE,
     DJI_WIFI_HANDSHAKE,
@@ -220,6 +221,9 @@ class DjiWifiUdpTransport:
         self.sent_records: list[dict] = []
         self.ack_observed_count = 0
         self.last_ack_sequence: int | None = None
+        self.response_packet_count = 0
+        self.last_response_sequence: int | None = None
+        self.ambiguous_window_count = 0
         self.keepalive_sent_count = 0
         self.keepalive_response_count = 0
         self.last_keepalive_response_ns: int | None = None
@@ -398,26 +402,61 @@ class DjiWifiUdpTransport:
             basic = DjiWifiBasicHeader.parse(data)
         except Exception:
             basic = None
-        if (
+        valid_session_packet = (
             basic is not None
             and basic.checksum_valid
             and basic.format_nibble == DJI_WIFI_FORMAT_NIBBLE
             and basic.session_id == self.handshake_profile.session_id
-            and basic.wh_type == 0x03
-            and self.sequencer is not None
-            and self.sequencer.observe_peer_sequence(basic.transport_sequence)
-        ):
-            self.ack_observed_count += 1
-            self.last_ack_sequence = basic.transport_sequence
+        )
+        if valid_session_packet and basic is not None and basic.wh_type == 0x03:
+            # WhType 03 carries a response packet's own transport sequence. It
+            # is not Mimo's cumulative peer_sequence source; retain it as
+            # response provenance without advancing the outbound window.
+            self.response_packet_count += 1
+            self.last_response_sequence = basic.transport_sequence
             self.event_handler(
                 {
                     "wall_time_utc": _utc_now(),
                     "monotonic_ns": time.monotonic_ns(),
-                    "kind": "transport_ack_observed",
-                    "ack_sequence": basic.transport_sequence,
-                    "ack_observed_count": self.ack_observed_count,
+                    "kind": "transport_response_observed",
+                    "response_sequence": basic.transport_sequence,
+                    "response_packet_count": self.response_packet_count,
                 }
             )
+        if valid_session_packet and basic is not None and basic.wh_type == 0x01:
+            try:
+                status = DjiWifiFlowStatus.parse(data)
+            except Exception:
+                status = None
+            if status is not None:
+                peer_sequence = status.operator_peer_sequence
+                if peer_sequence is None:
+                    self.ambiguous_window_count += 1
+                    self.event_handler(
+                        {
+                            "wall_time_utc": _utc_now(),
+                            "monotonic_ns": time.monotonic_ns(),
+                            "kind": "transport_window_ambiguous",
+                            "range_start": status.range_3.start,
+                            "range_end": status.range_3.end,
+                            "ambiguous_window_count": self.ambiguous_window_count,
+                        }
+                    )
+                elif self.sequencer is not None and self.sequencer.observe_peer_sequence(
+                    peer_sequence
+                ):
+                    self.ack_observed_count += 1
+                    self.last_ack_sequence = peer_sequence
+                    self.event_handler(
+                        {
+                            "wall_time_utc": _utc_now(),
+                            "monotonic_ns": time.monotonic_ns(),
+                            "kind": "transport_ack_observed",
+                            "ack_source": "wh_type_01_range_3",
+                            "ack_sequence": peer_sequence,
+                            "ack_observed_count": self.ack_observed_count,
+                        }
+                    )
         try:
             envelope = DjiWifiEnvelope.parse(data)
             if envelope.session_id != self.handshake_profile.session_id:

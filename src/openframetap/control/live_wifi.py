@@ -86,6 +86,9 @@ class LiveWifiControlSession:
             "max_offset": self._max_offset,
             "transport_ack_count": 0,
             "last_ack_sequence": None,
+            "transport_response_count": 0,
+            "last_response_sequence": None,
+            "ambiguous_window_count": 0,
             "keepalive_sent_count": 0,
             "keepalive_response_count": 0,
         }
@@ -157,6 +160,9 @@ class LiveWifiControlSession:
                 self._set(
                     transport_ack_count=getattr(transport, "ack_observed_count", 0),
                     last_ack_sequence=getattr(transport, "last_ack_sequence", None),
+                    transport_response_count=getattr(transport, "response_packet_count", 0),
+                    last_response_sequence=getattr(transport, "last_response_sequence", None),
+                    ambiguous_window_count=getattr(transport, "ambiguous_window_count", 0),
                     keepalive_sent_count=getattr(transport, "keepalive_sent_count", 0),
                     keepalive_response_count=getattr(transport, "keepalive_response_count", 0),
                 )

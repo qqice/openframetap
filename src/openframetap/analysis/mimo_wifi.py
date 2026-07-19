@@ -12,7 +12,12 @@ import statistics
 import struct
 
 from openframetap.protocol.reassembly import DumlStreamReassembler
-from openframetap.protocol.dji_wifi import DjiWifiEnvelope, DjiWifiEnvelopeError
+from openframetap.protocol.dji_wifi import (
+    DjiWifiBasicHeader,
+    DjiWifiEnvelope,
+    DjiWifiEnvelopeError,
+    DjiWifiFlowStatus,
+)
 
 
 DLT_RAW = 101
@@ -400,6 +405,66 @@ def analyze_dji_wifi_envelope(path: Path) -> dict:
     delivery_by_command: dict[str, Counter] = defaultdict(Counter)
     for _datagram, envelope, frame in selected:
         delivery_by_command[f"{frame.cmd_set:02X}/{frame.cmd_id:02X}"][envelope.delivery_flags] += 1
+
+    # Reconstruct the cumulative receipt source used by Mimo for the next
+    # outbound peer_sequence.  This is intentionally independent of DUML
+    # command semantics: WhType 01 range 3 advances for both no-ACK 04/01 and
+    # ACK-requesting traffic, whereas WhType 03 only identifies an individual
+    # response packet.
+    reverse_flow = (flow[2], flow[3], flow[0], flow[1])
+    selected_session_id = controls[0][1].session_id
+    latest_status_sequence: int | None = None
+    latest_response_sequence: int | None = None
+    status_packet_count = 0
+    status_transition_count = 0
+    ambiguous_status_count = 0
+    peer_equals_latest_status = 0
+    peer_equals_latest_response = 0
+    peer_status_lag_steps: Counter[int] = Counter()
+    comparable_outbound_count = 0
+    for datagram in datagrams:
+        if datagram.flow == reverse_flow:
+            try:
+                basic = DjiWifiBasicHeader.parse(datagram.payload)
+            except DjiWifiEnvelopeError:
+                continue
+            if (
+                not basic.checksum_valid
+                or basic.session_id != selected_session_id
+                or basic.format_nibble != 8
+            ):
+                continue
+            if basic.wh_type == 1:
+                try:
+                    status = DjiWifiFlowStatus.parse(datagram.payload)
+                except DjiWifiEnvelopeError:
+                    continue
+                status_packet_count += 1
+                sequence = status.operator_peer_sequence
+                if sequence is None:
+                    ambiguous_status_count += 1
+                else:
+                    if sequence != latest_status_sequence:
+                        status_transition_count += 1
+                    latest_status_sequence = sequence
+            elif basic.wh_type == 3:
+                latest_response_sequence = basic.transport_sequence
+        elif datagram.flow == flow:
+            try:
+                envelope = DjiWifiEnvelope.parse(datagram.payload)
+            except DjiWifiEnvelopeError:
+                continue
+            if envelope.wh_type != 5 or envelope.session_id != selected_session_id:
+                continue
+            if latest_status_sequence is not None:
+                comparable_outbound_count += 1
+                if envelope.peer_sequence == latest_status_sequence:
+                    peer_equals_latest_status += 1
+                delta = (latest_status_sequence - envelope.peer_sequence) & 0xFFFF
+                if delta < 0x8000 and delta % 8 == 0:
+                    peer_status_lag_steps[delta // 8] += 1
+            if envelope.peer_sequence == latest_response_sequence:
+                peer_equals_latest_response += 1
     return {
         "source_file": path.name,
         "source_sha256": _sha256(path),
@@ -439,6 +504,20 @@ def analyze_dji_wifi_envelope(path: Path) -> dict:
         },
         "delivery_flags_by_command": {
             key: dict(value) for key, value in sorted(delivery_by_command.items())
+        },
+        "flow_control": {
+            "wh_type_01_status_packet_count": status_packet_count,
+            "wh_type_01_range_3_transition_count": status_transition_count,
+            "wh_type_01_range_3_ambiguous_count": ambiguous_status_count,
+            "comparable_outbound_wh_type_05_count": comparable_outbound_count,
+            "peer_equals_latest_wh_type_01_range_3_count": peer_equals_latest_status,
+            "peer_equals_latest_wh_type_03_sequence_count": peer_equals_latest_response,
+            "peer_lag_from_latest_wh_type_01_range_3_steps": dict(
+                sorted(peer_status_lag_steps.items())
+            ),
+            "maximum_observed_lag_steps": (
+                max(peer_status_lag_steps) if peer_status_lag_steps else None
+            ),
         },
         "provenance": {
             "unknown_delivery_flag": (

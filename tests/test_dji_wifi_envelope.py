@@ -7,6 +7,7 @@ import pytest
 from openframetap.protocol.dji_wifi import (
     DjiWifiEnvelope,
     DjiWifiEnvelopeError,
+    DjiWifiFlowStatus,
     DjiWifiOperatorSequencer,
 )
 
@@ -14,6 +15,16 @@ from openframetap.protocol.dji_wifi import (
 CAPTURED_CENTER = bytes.fromhex(
     "2b805570a89005b3a090a89000000000c0010000"
     "55170438020442b70004010004000000040080420005b8"
+)
+
+CAPTURED_WH1_STATUS = bytes.fromhex(
+    "34805d630000018b"
+    "f8a6f8a600000000"
+    "f8a6f8a600000000"
+    "00a700a700000000"
+    "1200"
+    "551004560204000040045001040554a6"
+    "0000"
 )
 
 
@@ -41,6 +52,32 @@ def test_length_and_checksum_corruption_are_visible() -> None:
     assert not DjiWifiEnvelope.parse(corrupted).checksum_valid
     with pytest.raises(DjiWifiEnvelopeError, match="truncated"):
         DjiWifiEnvelope.parse(CAPTURED_CENTER[:-1])
+
+
+def test_parse_wh_type_01_status_and_operator_receipt_window() -> None:
+    status = DjiWifiFlowStatus.parse(CAPTURED_WH1_STATUS)
+    assert status.basic.wh_type == 1
+    assert status.basic.session_id == 0x635D
+    assert (status.range_1.start, status.range_1.end) == (0xA6F8, 0xA6F8)
+    assert (status.range_2.start, status.range_2.end) == (0xA6F8, 0xA6F8)
+    assert (status.range_3.start, status.range_3.end) == (0xA700, 0xA700)
+    assert status.operator_peer_sequence == 0xA700
+    assert status.payload_length == 18
+    assert len(status.payload) == 18
+
+
+def test_wh_type_01_ambiguous_operator_range_fails_closed() -> None:
+    raw = bytearray(CAPTURED_WH1_STATUS)
+    raw[26:28] = (0xA708).to_bytes(2, "little")
+    status = DjiWifiFlowStatus.parse(raw)
+    assert status.operator_peer_sequence is None
+
+
+def test_wh_type_01_rejects_inconsistent_embedded_payload_length() -> None:
+    raw = bytearray(CAPTURED_WH1_STATUS)
+    raw[32:34] = (17).to_bytes(2, "little")
+    with pytest.raises(DjiWifiEnvelopeError, match="payload length"):
+        DjiWifiFlowStatus.parse(raw)
 
 
 def test_operator_sequence_and_message_counter_wrap() -> None:

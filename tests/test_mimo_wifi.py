@@ -6,7 +6,11 @@ import struct
 
 import pytest
 
-from openframetap.analysis.mimo_wifi import analyze_mimo_wifi_gimbal
+from openframetap.analysis.mimo_wifi import (
+    analyze_dji_wifi_envelope,
+    analyze_mimo_wifi_gimbal,
+)
+from openframetap.protocol.dji_wifi import DjiWifiBasicHeader, DjiWifiEnvelope
 from openframetap.protocol.duml import encode_duml_frame
 
 
@@ -48,6 +52,33 @@ def _frame(sequence: int, payload: bytes, *, command: int = 1) -> bytes:
     )
 
 
+def _flow_status(session_id: int, operator_sequence: int) -> bytes:
+    basic = DjiWifiBasicHeader(
+        total_length=34,
+        format_nibble=8,
+        session_id=session_id,
+        transport_sequence=0,
+        wh_type=1,
+        checksum=0,
+        checksum_valid=True,
+    ).encode()
+    window = operator_sequence.to_bytes(2, "little") * 2 + b"\0" * 4
+    return basic + window * 3 + b"\0\0"
+
+
+def _operator(
+    session_id: int, transport_sequence: int, peer_sequence: int, duml_sequence: int
+) -> bytes:
+    duml = _frame(duml_sequence, struct.pack("<5H", 1024, 0, 1024, 0x8000, 0x42))
+    return DjiWifiEnvelope.operator_command(
+        duml,
+        session_id=session_id,
+        transport_sequence=transport_sequence,
+        peer_sequence=peer_sequence,
+        message_sequence=0x0101,
+    ).encode()
+
+
 def test_extracts_four_mimo_pwm_action_groups_without_authorizing_them(tmp_path: Path) -> None:
     neutral = struct.pack("<5H", 1024, 0, 1024, 0x8000, 0x42)
     records = []
@@ -84,3 +115,25 @@ def test_rejects_non_pcap_and_pcap_without_control(tmp_path: Path) -> None:
     _pcap(empty, [(1.0, _udp(PHONE, 1, POCKET, 2, b"nothing"))])
     with pytest.raises(ValueError, match="04/01"):
         analyze_mimo_wifi_gimbal(empty)
+
+
+def test_envelope_analysis_identifies_wh_type_01_peer_sequence_source(
+    tmp_path: Path,
+) -> None:
+    session_id = 0x1234
+    records = [
+        (1.0, _udp(POCKET, 9004, PHONE, 54232, _flow_status(session_id, 0x1000))),
+        (1.1, _udp(PHONE, 54232, POCKET, 9004, _operator(session_id, 0x1008, 0x1000, 1))),
+        (1.2, _udp(POCKET, 9004, PHONE, 54232, _flow_status(session_id, 0x1008))),
+        (1.3, _udp(PHONE, 54232, POCKET, 9004, _operator(session_id, 0x1010, 0x1008, 2))),
+    ]
+    path = tmp_path / "flow-control.pcap"
+    _pcap(path, records)
+    result = analyze_dji_wifi_envelope(path)
+    flow = result["flow_control"]
+    assert flow["wh_type_01_status_packet_count"] == 2
+    assert flow["wh_type_01_range_3_transition_count"] == 2
+    assert flow["wh_type_01_range_3_ambiguous_count"] == 0
+    assert flow["comparable_outbound_wh_type_05_count"] == 2
+    assert flow["peer_equals_latest_wh_type_01_range_3_count"] == 2
+    assert flow["peer_lag_from_latest_wh_type_01_range_3_steps"] == {0: 2}

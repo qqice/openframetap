@@ -12,7 +12,9 @@ from dataclasses import dataclass
 
 DJI_WIFI_HEADER_LENGTH = 20
 DJI_WIFI_BASIC_HEADER_LENGTH = 8
+DJI_WIFI_FLOW_STATUS_LENGTH = 34
 DJI_WIFI_FORMAT_NIBBLE = 0x8
+DJI_WIFI_DEVICE_STATUS = 0x01
 DJI_WIFI_OPERATOR_COMMAND = 0x05
 DJI_WIFI_HANDSHAKE = 0x00
 DJI_WIFI_TARGET_PORT = 9004
@@ -78,6 +80,77 @@ class DjiWifiBasicHeader:
             + bytes((self.wh_type,))
         )
         return first_seven + bytes((header_xor_checksum(first_seven),))
+
+
+@dataclass(frozen=True, slots=True)
+class DjiWifiSequenceWindow:
+    """One provisional start/end range in a WhType 01 status packet."""
+
+    start: int
+    end: int
+    reserved: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class DjiWifiFlowStatus:
+    """The 34-byte status prefix observed on Pocket-to-operator WhType 01.
+
+    The three ranges are deliberately numbered rather than assigned broad
+    protocol semantics.  Mimo and OpenFrameTap captures independently show
+    that range 3 is the cumulative receipt state for operator WhType 05
+    packets.  Only an equal start/end pair is exposed as a safe peer sequence;
+    a range-shaped value remains preserved but is not guessed at.
+    """
+
+    basic: DjiWifiBasicHeader
+    range_1: DjiWifiSequenceWindow
+    range_2: DjiWifiSequenceWindow
+    range_3: DjiWifiSequenceWindow
+    payload_length: int
+    payload: bytes
+
+    @classmethod
+    def parse(cls, data: bytes) -> "DjiWifiFlowStatus":
+        raw = bytes(data)
+        basic = DjiWifiBasicHeader.parse(raw)
+        if basic.wh_type != DJI_WIFI_DEVICE_STATUS:
+            raise DjiWifiEnvelopeError("DJI Wi-Fi packet is not WhType 01 status")
+        if basic.total_length < DJI_WIFI_FLOW_STATUS_LENGTH:
+            raise DjiWifiEnvelopeError("truncated DJI Wi-Fi WhType 01 status prefix")
+        if len(raw) < basic.total_length:
+            raise DjiWifiEnvelopeError(
+                f"truncated DJI Wi-Fi WhType 01 status: expected {basic.total_length}, got {len(raw)}"
+            )
+        raw = raw[: basic.total_length]
+
+        def window(offset: int) -> DjiWifiSequenceWindow:
+            return DjiWifiSequenceWindow(
+                start=int.from_bytes(raw[offset : offset + 2], "little"),
+                end=int.from_bytes(raw[offset + 2 : offset + 4], "little"),
+                reserved=raw[offset + 4 : offset + 8],
+            )
+
+        payload_length = int.from_bytes(raw[32:34], "little")
+        if basic.total_length != DJI_WIFI_FLOW_STATUS_LENGTH + payload_length:
+            raise DjiWifiEnvelopeError(
+                "WhType 01 payload length does not match the basic-header length"
+            )
+        return cls(
+            basic=basic,
+            range_1=window(8),
+            range_2=window(16),
+            range_3=window(24),
+            payload_length=payload_length,
+            payload=raw[DJI_WIFI_FLOW_STATUS_LENGTH:],
+        )
+
+    @property
+    def operator_peer_sequence(self) -> int | None:
+        """Return the capture-verified cumulative value, or fail closed."""
+
+        if self.range_3.start != self.range_3.end:
+            return None
+        return self.range_3.end
 
 
 @dataclass(frozen=True, slots=True)

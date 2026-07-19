@@ -185,22 +185,22 @@ def test_transport_accepts_only_structured_command_and_single_writer() -> None:
     asyncio.run(scenario())
 
 
-def test_transport_ack_updates_next_operator_envelope_peer_sequence() -> None:
+def test_wh_type_01_window_updates_next_operator_envelope_peer_sequence() -> None:
     async def scenario() -> None:
         transport = DjiWifiUdpTransport(
             "192.168.2.1", handshake_profile=DjiWifiHandshakeProfile()
         )
         transport.socket = object()
         transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82B0, 0x82A8)
-        ack = DjiWifiBasicHeader(
-            total_length=8,
-            format_nibble=8,
-            session_id=0x7055,
-            transport_sequence=0x82B0,
-            wh_type=3,
-            checksum=0,
-            checksum_valid=True,
-        ).encode()
+        # Pocket's WhType 01 third range is the cumulative receipt state used
+        # by Mimo as the next outbound peer_sequence.
+        ack = bytes.fromhex(
+            "2280557000000186"
+            "a882a88200000000"
+            "a882a88200000000"
+            "b082b08200000000"
+            "0000"
+        )
 
         async def recvfrom(_size):
             return ack, ("192.168.2.1", 9004)
@@ -217,6 +217,74 @@ def test_transport_ack_updates_next_operator_envelope_peer_sequence() -> None:
         assert transport.ack_observed_count == 1
         assert transport.last_ack_sequence == 0x82B0
         assert DjiWifiEnvelope.parse(sent[-1]).peer_sequence == 0x82B0
+
+    asyncio.run(scenario())
+
+
+def test_wh_type_03_response_does_not_replace_cumulative_peer_window() -> None:
+    async def scenario() -> None:
+        events = []
+        transport = DjiWifiUdpTransport(
+            "192.168.2.1",
+            handshake_profile=DjiWifiHandshakeProfile(),
+            event_handler=events.append,
+        )
+        transport.socket = object()
+        transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82C0, 0x82B0)
+        response = DjiWifiBasicHeader(
+            total_length=8,
+            format_nibble=8,
+            session_id=0x7055,
+            transport_sequence=0x82B8,
+            wh_type=3,
+            checksum=0,
+            checksum_valid=True,
+        ).encode()
+
+        async def recvfrom(_size):
+            return response, ("192.168.2.1", 9004)
+
+        sent = []
+
+        async def sendto(data):
+            sent.append(data)
+
+        transport._recvfrom = recvfrom
+        transport._sendto = sendto
+        await transport.receive_datagram()
+        await transport.send_stick(CENTER_STICK_COMMAND, reason="after_response")
+        assert transport.ack_observed_count == 0
+        assert transport.response_packet_count == 1
+        assert transport.last_response_sequence == 0x82B8
+        assert DjiWifiEnvelope.parse(sent[-1]).peer_sequence == 0x82B0
+        assert any(item["kind"] == "transport_response_observed" for item in events)
+
+    asyncio.run(scenario())
+
+
+def test_wh_type_01_ambiguous_third_range_does_not_advance_peer_sequence() -> None:
+    async def scenario() -> None:
+        transport = DjiWifiUdpTransport(
+            "192.168.2.1", handshake_profile=DjiWifiHandshakeProfile()
+        )
+        transport.socket = object()
+        transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82C0, 0x82A8)
+        status = bytearray.fromhex(
+            "2280557000000186"
+            "a882a88200000000"
+            "a882a88200000000"
+            "b082b88200000000"
+            "0000"
+        )
+
+        async def recvfrom(_size):
+            return bytes(status), ("192.168.2.1", 9004)
+
+        transport._recvfrom = recvfrom
+        await transport.receive_datagram()
+        assert transport.ack_observed_count == 0
+        assert transport.ambiguous_window_count == 1
+        assert transport.sequencer.peer_sequence == 0x82A8
 
     asyncio.run(scenario())
 

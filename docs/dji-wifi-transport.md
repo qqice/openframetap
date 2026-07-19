@@ -31,7 +31,7 @@ It does not generalize session-specific values into universal DJI constants.
 | 4 | 2 | transport sequence | little-endian, increments by 8 for each upstream WhType 05 packet |
 | 6 | 1 | WhType/channel | `05` for operator-to-device command packets |
 | 7 | 1 | basic-header checksum | XOR of bytes 0 through 7 is zero |
-| 8 | 2 | peer sequence | latest/near-latest peer transport sequence; precise acknowledgement semantics remain provisional |
+| 8 | 2 | peer sequence | latest processed WhType 01 range-3 cumulative receipt value, sometimes lagging it by a small scheduling window |
 | 10 | 2 | sequence echo | equals the transport sequence at offset 4 in all target samples |
 | 12 | 4 | reserved | zero in all target samples |
 | 16 | 2 | message sequence | `0x0100 | counter`; low byte increments and wraps |
@@ -70,18 +70,53 @@ bytes 6–7 as the underlying little-endian counter yields `+1` for 2,230 of
 interleaved traffic. The first twelve captured upstream frames are all `+1`.
 
 An early live prototype incremented the codec value directly, producing wire
-bytes `00 00`, `00 01`, `00 02`. Pocket accepted the first control burst and
-then stopped responding to both `04/01` and `04/50`. ACK synchronization,
-fresh session IDs, keepalive tolerance, and experimental WhType `04` traffic
-did not change that boundary. The WhType `04` experiment generated excessive
-traffic without advancing the Pocket ACK window and has been removed.
+bytes `00 00`, `00 01`, `00 02`; that mismatch has been corrected. A separate
+transport-window bug then produced the same user-visible "first gesture only"
+failure and is documented below. Fresh session IDs and an experimental
+WhType `04` generator did not address that bug. The WhType `04` experiment
+generated excessive traffic and has been removed.
+
+## WhType 01 cumulative receipt state
+
+Pocket-to-operator WhType `01` datagrams begin with a 34-byte structure:
+
+| Offset | Width | Observed field |
+|---:|---:|---|
+| 0 | 8 | basic header (`wh_type == 01`) |
+| 8 | 8 | provisional sequence range 1: start, end, four reserved bytes |
+| 16 | 8 | provisional sequence range 2: start, end, four reserved bytes |
+| 24 | 8 | provisional sequence range 3: start, end, four reserved bytes |
+| 32 | 2 | trailing payload length |
+| 34 | variable | optional DUML payload |
+
+Range 3 is the cumulative receipt source for operator WhType `05` packets.
+This conclusion is supported by both independent captures:
+
+- **Mimo capture:** 6,895 valid WhType `01` status packets contain 1,486
+  range-3 transitions and no unequal range-3 start/end pair. Of 2,581
+  comparable outbound WhType `05` packets, 1,823 use the latest value exactly;
+  all remaining packets lag it by only 1–10 eight-byte sequence steps. Zero
+  outbound packets use the most recently observed WhType `03` basic-header
+  sequence.
+- **OpenFrameTap failure capture:** Pocket advanced range 3 from `42744` to
+  `42952`, while the old implementation advanced its outbound `peer_sequence`
+  only from sparse WhType `03` responses and stopped at `42808`. The stale gap
+  reached 18–20 steps; later control keepalives were ignored and the UI entered
+  FAULT even though Pocket had already reported receipt of the control burst.
+
+The parser now validates the embedded payload length and preserves all three
+ranges. The sender advances only from an equal range-3 start/end pair; an
+unequal pair is logged and ignored rather than assigning an unverified range
+semantic. WhType `03` remains recorded as individual response provenance and
+is no longer used as cumulative acknowledgement state.
 
 ## Command boundary
 
-The only outbound DUML command allowed by the current Wi-Fi control profile is
-`04/01` constructed from `Pocket3StickCommand`. In particular:
+The only outbound DUML command families allowed by the current Wi-Fi control
+profile are `04/01` constructed from `Pocket3StickCommand` and the exact
+capture-verified `04/50` session keepalive payload `01 04 05`. In particular:
 
-- `04/50` can be parsed offline but is rejected by the send policy;
+- caller-supplied or altered `04/50` payloads are rejected;
 - arbitrary hexadecimal datagrams and caller-supplied ten-byte payloads have
   no public send API;
 - WhType other than `05`, nonzero delivery flags, changed reserved fields,
