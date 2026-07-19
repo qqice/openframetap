@@ -88,6 +88,7 @@ class LiveWifiControlSession:
             "last_ack_sequence": None,
             "keepalive_sent_count": 0,
             "keepalive_response_count": 0,
+            "transport_flow_ack_count": 0,
         }
 
     def _set(self, **values) -> None:
@@ -159,6 +160,7 @@ class LiveWifiControlSession:
                     last_ack_sequence=getattr(transport, "last_ack_sequence", None),
                     keepalive_sent_count=getattr(transport, "keepalive_sent_count", 0),
                     keepalive_response_count=getattr(transport, "keepalive_response_count", 0),
+                    transport_flow_ack_count=getattr(transport, "flow_ack_sent_count", 0),
                 )
                 data = record.to_dict()
                 data["kind"] = "udp_received"

@@ -259,6 +259,43 @@ def test_transport_matches_control_keepalive_response_by_duml_sequence() -> None
     asyncio.run(scenario())
 
 
+def test_transport_flow_ack_matches_mimo_capture_and_tracks_latest_send() -> None:
+    async def scenario() -> None:
+        transport = DjiWifiUdpTransport(
+            "192.168.2.1", handshake_profile=DjiWifiHandshakeProfile()
+        )
+        transport.socket = object()
+        transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82B0, 0x82A8)
+        transport.last_sent_transport_sequence = 0x82B0
+        incoming = bytes.fromhex(
+            "6b805570000001cfa882a88200000000a882a88200000000"
+            "b082b082000000004900"
+            "554904930102402f000280010280000151e7000068de0000"
+            "000000004f0f000000000000000000000000000246000001"
+            "00000000000000000000000000000000000000000100001d05"
+        )
+        sent = []
+
+        async def recvfrom(_size):
+            return incoming, ("192.168.2.1", 9004)
+
+        async def sendto(data):
+            sent.append(data)
+
+        transport._recvfrom = recvfrom
+        transport._sendto = sendto
+        await transport.receive_datagram()
+        assert sent == [
+            bytes.fromhex(
+                "2280557000000483a882a88200000000a882a88200000000"
+                "b082b082000000000000"
+            )
+        ]
+        assert transport.flow_ack_sent_count == 1
+
+    asyncio.run(scenario())
+
+
 def test_center_test_and_pulse_always_end_at_center() -> None:
     async def scenario() -> None:
         sink = FakeSink()

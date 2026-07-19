@@ -216,6 +216,8 @@ class DjiWifiUdpTransport:
         self.keepalive_response_count = 0
         self.last_keepalive_response_ns: int | None = None
         self.pending_keepalives: dict[int, int] = {}
+        self.last_sent_transport_sequence = self.handshake_profile.sequence_seed
+        self.flow_ack_sent_count = 0
 
     @property
     def is_open(self) -> bool:
@@ -301,6 +303,7 @@ class DjiWifiUdpTransport:
                 envelope.validate_operator_policy()
                 datagram = envelope.encode()
                 await self._sendto(datagram)
+                self.last_sent_transport_sequence = envelope.transport_sequence
                 self.duml_sequence = (self.duml_sequence + 1) & 0xFFFF
                 record = {
                     "wall_time_utc": _utc_now(),
@@ -342,6 +345,7 @@ class DjiWifiUdpTransport:
                 envelope.validate_operator_policy()
                 datagram = envelope.encode()
                 await self._sendto(datagram)
+                self.last_sent_transport_sequence = envelope.transport_sequence
                 self.duml_sequence = (self.duml_sequence + 1) & 0xFFFF
                 self.keepalive_sent_count += 1
                 record = {
@@ -401,6 +405,45 @@ class DjiWifiUdpTransport:
                     "kind": "transport_ack_observed",
                     "ack_sequence": basic.transport_sequence,
                     "ack_observed_count": self.ack_observed_count,
+                }
+            )
+        if (
+            basic is not None
+            and basic.checksum_valid
+            and basic.format_nibble == DJI_WIFI_FORMAT_NIBBLE
+            and basic.session_id == self.handshake_profile.session_id
+            and basic.wh_type == 0x01
+            and len(data) >= 34
+        ):
+            # WhType 04 is the operator-side flow acknowledgement observed at
+            # ~29 Hz throughout Mimo's session.  It contains no DUML payload:
+            # preserve the Pocket-provided receive-window metadata at 8..25,
+            # then acknowledge our latest WhType 05 transport sequence.
+            header = DjiWifiBasicHeader(
+                total_length=34,
+                format_nibble=DJI_WIFI_FORMAT_NIBBLE,
+                session_id=self.handshake_profile.session_id,
+                transport_sequence=0,
+                wh_type=0x04,
+                checksum=0,
+                checksum_valid=True,
+            ).encode()
+            flow_ack = (
+                header
+                + bytes(data[8:26])
+                + self.last_sent_transport_sequence.to_bytes(2, "little")
+                + b"\x00" * 6
+            )
+            await self._sendto(flow_ack)
+            self.flow_ack_sent_count += 1
+            self.event_handler(
+                {
+                    "wall_time_utc": _utc_now(),
+                    "monotonic_ns": time.monotonic_ns(),
+                    "kind": "transport_flow_ack",
+                    "ack_sequence": self.last_sent_transport_sequence,
+                    "flow_ack_sent_count": self.flow_ack_sent_count,
+                    "data_hex": flow_ack.hex(),
                 }
             )
         try:
