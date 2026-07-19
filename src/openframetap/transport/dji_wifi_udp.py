@@ -67,6 +67,24 @@ def parse_rtmp_publisher_ips(ss_output: str) -> tuple[str, ...]:
 def discover_rtmp_publisher_ip(
     *, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
 ) -> str:
+    addresses = list_rtmp_server_peer_ips(runner=runner)
+    if len(addresses) != 1:
+        raise RuntimeError(
+            f"expected exactly one current private RTMP publisher, found {len(addresses)}"
+        )
+    return addresses[0]
+
+
+def list_rtmp_server_peer_ips(
+    *, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> tuple[str, ...]:
+    """Return private peers connected to MediaMTX's RTMP listener.
+
+    This includes the Pocket publisher and may also include a local playback
+    client.  Callers that already locked a Pocket target must therefore check
+    membership instead of requiring this list to contain exactly one address.
+    """
+
     result = runner(
         ["ss", "-Htn", "state", "established", "sport", "=", ":1935"],
         text=True,
@@ -76,12 +94,7 @@ def discover_rtmp_publisher_ip(
     )
     if result.returncode != 0:
         raise RuntimeError(f"unable to inspect MediaMTX publisher: {result.stderr.strip()}")
-    addresses = parse_rtmp_publisher_ips(result.stdout)
-    if len(addresses) != 1:
-        raise RuntimeError(
-            f"expected exactly one current private RTMP publisher, found {len(addresses)}"
-        )
-    return addresses[0]
+    return parse_rtmp_publisher_ips(result.stdout)
 
 
 @dataclass(frozen=True, slots=True)

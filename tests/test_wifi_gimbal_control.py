@@ -24,6 +24,7 @@ from openframetap.protocol.duml import encode_duml_frame
 from openframetap.transport.dji_wifi_udp import (
     DjiWifiHandshakeProfile,
     DjiWifiUdpTransport,
+    list_rtmp_server_peer_ips,
     parse_rtmp_publisher_ips,
     validate_pocket_target_ip,
 )
@@ -98,6 +99,18 @@ def test_target_and_publisher_parsing_reject_tailscale() -> None:
         validate_pocket_target_ip("100.125.223.67")
     with pytest.raises(ValueError):
         validate_pocket_target_ip("8.8.8.8")
+
+
+def test_runtime_peer_list_keeps_publisher_when_local_player_is_connected() -> None:
+    output = (
+        "0 0 192.168.1.229:1935 192.168.1.223:41098\n"
+        "0 0 192.168.1.229:1935 192.168.1.229:41100\n"
+    )
+    runner = lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, output, "")
+    assert list_rtmp_server_peer_ips(runner=runner) == (
+        "192.168.1.223",
+        "192.168.1.229",
+    )
 
 
 def test_target_port_and_local_port_ownership() -> None:

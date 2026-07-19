@@ -21,6 +21,7 @@ from openframetap.protocol.reassembly import DumlStreamReassembler
 from openframetap.transport.dji_wifi_udp import (
     DjiWifiUdpTransport,
     discover_rtmp_publisher_ip,
+    list_rtmp_server_peer_ips,
 )
 
 
@@ -182,7 +183,12 @@ class LiveWifiControlSession:
                     self._stop.set()
                     break
                 if now - last_publisher_check_ns >= 1_000_000_000:
-                    if discover_rtmp_publisher_ip() != target_ip:
+                    # The application's own rtmpsrc connection also appears
+                    # as a peer of MediaMTX's :1935 listener.  Keep the
+                    # initially locked Pocket address and verify membership;
+                    # requiring a singleton here faults as soon as video is
+                    # embedded in the same application.
+                    if target_ip not in list_rtmp_server_peer_ips():
                         await controller.emergency_stop("rtmp_publisher_lost")
                         raise RuntimeError("RTMP publisher disappeared or changed")
                     last_publisher_check_ns = now

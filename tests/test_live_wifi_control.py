@@ -53,6 +53,10 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
         "openframetap.control.live_wifi.discover_rtmp_publisher_ip",
         lambda: "192.168.1.223",
     )
+    monkeypatch.setattr(
+        "openframetap.control.live_wifi.list_rtmp_server_peer_ips",
+        lambda: ("192.168.1.223", "192.168.1.229"),
+    )
     state = StateStore(AppStateSnapshot(ble_connected=True, rtmp_publisher_online=True))
     session = LiveWifiControlSession(state, transport_factory=FakeTransport)
     session.start()
