@@ -1,0 +1,12 @@
+{
+  "joystick": {
+    "logical_width": 1280,
+    "logical_height": 720,
+    "center_x": 150.0,
+    "center_y": 570.0,
+    "radius": 110.0,
+    "deadzone": 0.12,
+    "maximum_output": 0.25,
+    "cubic_blend": 0.65
+  }
+}
