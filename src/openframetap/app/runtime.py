@@ -13,7 +13,14 @@ from typing import Any
 
 from openframetap.app.artifacts import JsonlWriter, write_manifest
 from openframetap.app.ble_status import ReadOnlyBleMonitor
+from openframetap.app.input import JoystickConfig, KeyboardInput, TouchJoystickInput
 from openframetap.app.state import AppStateSnapshot, StateStore
+from openframetap.control.safety import (
+    ControlPrerequisites,
+    ControlState,
+    FailClosedController,
+    MockCommandSink,
+)
 from openframetap.display.session import (
     discover_active_wayland_session,
     gnome_overview_active,
@@ -72,6 +79,8 @@ class GtkReadOnlyApp:
         sanitized_output: Path,
         duration_seconds: int,
         enable_ble: bool,
+        control_mode: str = "disabled",
+        joystick_config_path: Path = Path("config/control-ui.json"),
         registry_path: Path = Path("runtime/media-processes.json"),
     ) -> None:
         if not 1 <= duration_seconds <= 86400:
@@ -85,6 +94,9 @@ class GtkReadOnlyApp:
         self.sanitized_output.mkdir(parents=True, exist_ok=True)
         self.duration_seconds = duration_seconds
         self.enable_ble = enable_ble
+        if control_mode not in {"disabled", "mock"}:
+            raise ValueError("GTK runtime accepts only disabled or mock control")
+        self.control_mode = control_mode
         self.registry = ProcessRegistry(registry_path)
         self.state = StateStore()
         self.events = JsonlWriter(self.private_output / "events.jsonl")
@@ -104,6 +116,29 @@ class GtkReadOnlyApp:
         self.revision = -1
         self.labels: dict[str, Any] = {}
         self.screenshot = {"attempted": False, "saved": False, "error": None}
+        self.control = None
+        self.mock_sink = None
+        self.keyboard = None
+        self.touch = None
+        self.joystick_widget = None
+        self.input_events = None
+        self.sent_commands = None
+        self.control_states = None
+        self._mock_records_written = 0
+        if control_mode == "mock":
+            joystick = JoystickConfig.load(joystick_config_path)
+            self.keyboard = KeyboardInput(maximum_output=joystick.maximum_output)
+            self.touch = TouchJoystickInput(joystick)
+            self.mock_sink = MockCommandSink()
+            self.input_events = JsonlWriter(self.private_output / "input-events.jsonl")
+            self.sent_commands = JsonlWriter(self.private_output / "sent-commands.jsonl")
+            self.control_states = JsonlWriter(self.private_output / "control-state.jsonl")
+            self.control = FailClosedController(
+                self.mock_sink,
+                on_transition=self.control_states.write,
+                live=False,
+            )
+            self.control.arm(ControlPrerequisites(True, True, True, True, True, True, True))
 
     def _event(self, payload: dict) -> None:
         self.events.write(
@@ -119,8 +154,47 @@ class GtkReadOnlyApp:
             return
         self.stop_reason = reason
         self._event({"kind": "app_stop_requested", "reason": reason})
+        if self.control and self.control.state not in {
+            ControlState.DISABLED,
+            ControlState.FAULT,
+            ControlState.DISCONNECTED,
+        }:
+            try:
+                import asyncio
+
+                asyncio.run(self.control.stop(f"app_exit:{reason}"))
+                self._flush_mock_records()
+            except Exception as exc:
+                self._event({"kind": "control_stop_error", "error": str(exc)})
         if self.loop is not None:
             self.loop.quit()
+
+    def _flush_mock_records(self) -> None:
+        if not self.mock_sink or not self.sent_commands:
+            return
+        for record in self.mock_sink.records[self._mock_records_written :]:
+            self.sent_commands.write(record)
+        self._mock_records_written = len(self.mock_sink.records)
+
+    def _submit_control(self, value) -> None:
+        if not self.control:
+            return
+        if self.input_events:
+            self.input_events.write(value.to_dict())
+        if value.emergency_stop:
+            import asyncio
+
+            asyncio.run(self.control.emergency_stop("ui_emergency_stop"))
+        elif value.exit_requested:
+            import asyncio
+
+            asyncio.run(self.control.emergency_stop("ui_exit"))
+            self._request_stop("keyboard_exit")
+        else:
+            self.control.submit(value)
+        self._flush_mock_records()
+        if self.joystick_widget:
+            self.joystick_widget.queue_draw()
 
     def _build_window(self, Gtk, Gdk, Gst) -> None:
         tokens = [item for item in self.spec.argv[1:] if item not in {"-e", "-v"}]
@@ -141,7 +215,7 @@ class GtkReadOnlyApp:
         window.set_decorated(False)
         window.fullscreen()
         window.connect("delete-event", lambda *_args: (self._request_stop("window_close"), True)[1])
-        window.connect("focus-out-event", lambda *_args: self._event({"kind": "window_focus_lost"}))
+        window.connect("focus-out-event", self._on_focus_lost)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
@@ -153,14 +227,39 @@ class GtkReadOnlyApp:
             self.labels[key] = label
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
-        controls.set_size_request(-1, 96)
+        controls.set_size_request(-1, 136 if self.control_mode == "mock" else 96)
         controls.set_margin_start(24)
         controls.set_margin_end(24)
         controls.set_margin_top(10)
         controls.set_margin_bottom(10)
-        disabled = Gtk.Label(label="JOYSTICK DISABLED · READ-ONLY")
-        disabled.set_name("control-disabled")
-        controls.pack_start(disabled, False, False, 0)
+        if self.control_mode == "mock":
+            joystick = Gtk.DrawingArea()
+            joystick.set_size_request(270, 120)
+            joystick.set_events(
+                Gdk.EventMask.BUTTON_PRESS_MASK
+                | Gdk.EventMask.BUTTON_RELEASE_MASK
+                | Gdk.EventMask.POINTER_MOTION_MASK
+                | Gdk.EventMask.TOUCH_MASK
+            )
+            joystick.connect("draw", self._draw_joystick)
+            joystick.connect("button-press-event", self._on_pointer_down)
+            joystick.connect("motion-notify-event", self._on_pointer_move)
+            joystick.connect("button-release-event", self._on_pointer_up)
+            joystick.connect("touch-event", self._on_touch)
+            self.joystick_widget = joystick
+            controls.pack_start(joystick, False, False, 0)
+            mode = Gtk.Label(label="MOCK · CONTROL ARMED")
+            mode.set_name("control-mock")
+            controls.pack_start(mode, False, False, 0)
+            self.labels["control"] = mode
+            stop_button = Gtk.Button(label="STOP  Space")
+            stop_button.set_name("emergency-stop")
+            stop_button.connect("clicked", lambda *_args: self._mock_emergency())
+            controls.pack_end(stop_button, False, False, 0)
+        else:
+            disabled = Gtk.Label(label="JOYSTICK DISABLED · READ-ONLY")
+            disabled.set_name("control-disabled")
+            controls.pack_start(disabled, False, False, 0)
         exit_button = Gtk.Button(label="退出  Esc / Q")
         exit_button.connect("clicked", lambda *_args: self._request_stop("exit_button"))
         controls.pack_end(exit_button, False, False, 0)
@@ -173,12 +272,14 @@ class GtkReadOnlyApp:
         css.load_from_data(
             b"window { background: #000; color: #fff; } box { background: rgba(0,0,0,0.78); } "
             b"label { color: #fff; font-size: 15px; } #control-disabled { color: #ffcc33; font-size: 20px; } "
+            b"#control-mock { color: #55ddff; font-size: 20px; } #emergency-stop { background: #b00020; color: white; } "
             b"button { font-size: 18px; padding: 10px 18px; }"
         )
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
         window.connect("key-press-event", self._on_key)
+        window.connect("key-release-event", self._on_key_release)
         self.window = window
         self.fps_sink = fps_sink
         self.decoder = decoder
@@ -186,9 +287,108 @@ class GtkReadOnlyApp:
 
     def _on_key(self, _widget, event) -> bool:
         name = event.string.lower() if event.string else ""
+        key_name = self.bindings[1].keyval_name(event.keyval).lower()
+        if self.keyboard:
+            self._submit_control(self.keyboard.key_down(key_name))
+            return True
         if name == "q" or event.keyval == 65307:
             self._request_stop("keyboard_exit")
             return True
+        return False
+
+    def _on_key_release(self, _widget, event) -> bool:
+        if not self.keyboard:
+            return False
+        key_name = self.bindings[1].keyval_name(event.keyval).lower()
+        self._submit_control(self.keyboard.key_up(key_name))
+        return True
+
+    def _on_focus_lost(self, *_args) -> bool:
+        self._event({"kind": "window_focus_lost"})
+        if self.keyboard:
+            self.keyboard.reset()
+        if self.touch:
+            self.touch.touch_cancel()
+        if self.control:
+            import asyncio
+
+            asyncio.run(self.control.focus_lost())
+            self._flush_mock_records()
+        return False
+
+    def _mock_emergency(self) -> None:
+        if self.control:
+            import asyncio
+
+            asyncio.run(self.control.emergency_stop("screen_stop"))
+            self._flush_mock_records()
+
+    def _local_touch_config(self):
+        allocation = self.joystick_widget.get_allocation()
+        base = self.touch.config
+        return type(base)(
+            logical_width=allocation.width,
+            logical_height=allocation.height,
+            center_x=allocation.width / 2,
+            center_y=allocation.height / 2,
+            radius=min(allocation.width, allocation.height) * 0.42,
+            deadzone=base.deadzone,
+            maximum_output=base.maximum_output,
+            cubic_blend=base.cubic_blend,
+        )
+
+    def _touch_value(self, action: str, touch_id, x: float = 0, y: float = 0):
+        original = self.touch.config
+        self.touch.config = self._local_touch_config()
+        try:
+            if action == "touch_up":
+                return self.touch.touch_up(touch_id)
+            return getattr(self.touch, action)(touch_id, x, y)
+        finally:
+            self.touch.config = original
+
+    def _on_pointer_down(self, _widget, event) -> bool:
+        self._submit_control(self._touch_value("touch_down", "pointer", event.x, event.y))
+        return True
+
+    def _on_pointer_move(self, _widget, event) -> bool:
+        if event.state & self.bindings[1].ModifierType.BUTTON1_MASK:
+            self._submit_control(self._touch_value("touch_move", "pointer", event.x, event.y))
+        return True
+
+    def _on_pointer_up(self, _widget, _event) -> bool:
+        self._submit_control(self.touch.touch_up("pointer"))
+        return True
+
+    def _on_touch(self, _widget, event) -> bool:
+        Gdk = self.bindings[1]
+        sequence = event.get_event_sequence()
+        if event.type == Gdk.EventType.TOUCH_BEGIN:
+            value = self._touch_value("touch_down", sequence, event.x, event.y)
+        elif event.type == Gdk.EventType.TOUCH_UPDATE:
+            value = self._touch_value("touch_move", sequence, event.x, event.y)
+        elif event.type == Gdk.EventType.TOUCH_END:
+            value = self.touch.touch_up(sequence)
+        else:
+            value = self.touch.touch_cancel(sequence)
+        self._submit_control(value)
+        return True
+
+    def _draw_joystick(self, widget, cairo) -> bool:
+        allocation = widget.get_allocation()
+        cx, cy = allocation.width / 2, allocation.height / 2
+        radius = min(allocation.width, allocation.height) * 0.42
+        cairo.set_source_rgba(0.2, 0.7, 0.9, 0.35)
+        cairo.set_line_width(3)
+        cairo.arc(cx, cy, radius, 0, 6.28319)
+        cairo.stroke()
+        value = self.touch.current() if self.touch else None
+        scale = radius / max(self.touch.config.maximum_output, 0.001) if self.touch else 0
+        x = cx + (value.yaw * scale if value else 0)
+        y = cy - (value.pitch * scale if value else 0)
+        cairo.set_source_rgba(0.2, 0.8, 1.0, 0.9)
+        cairo.arc(x, y, 18, 0, 6.28319)
+        cairo.fill()
         return False
 
     def _update_labels(self, snapshot: AppStateSnapshot) -> None:
@@ -228,6 +428,32 @@ class GtkReadOnlyApp:
     def _tick(self) -> bool:
         Gtk, _Gdk, Gst, _GLib = self.bindings
         now_ns = time.monotonic_ns()
+        if self.control:
+            import asyncio
+
+            asyncio.run(self.control.tick())
+            self._flush_mock_records()
+            control = self.control.snapshot()
+            last_age = (
+                (now_ns - self.control.last_send_ns) / 1e6
+                if self.control.last_send_ns is not None
+                else None
+            )
+            self.state.update(
+                control_state=control["state"].upper(),
+                input_source=self.control.latest_input.source,
+                yaw=self.control.latest_input.yaw,
+                pitch=self.control.latest_input.pitch,
+                last_command_age_ms=last_age,
+                watchdog_state=self.control.watchdog_state,
+                last_zero_command_monotonic_ns=self.control.last_zero_ns,
+            )
+            if "control" in self.labels:
+                self.labels["control"].set_text(
+                    f"MOCK · {control['state'].upper()}  "
+                    f"Y {self.control.latest_input.yaw:+.2f}  "
+                    f"P {self.control.latest_input.pitch:+.2f}"
+                )
         bus = self.pipeline.get_bus()
         while message := bus.pop_filtered(Gst.MessageType.ERROR | Gst.MessageType.EOS):
             if message.type == Gst.MessageType.ERROR:
@@ -307,7 +533,7 @@ class GtkReadOnlyApp:
         config = {
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "address": self.address,
-            "control_mode": "disabled",
+            "control_mode": self.control_mode,
             "read_only": True,
             "duration_seconds": self.duration_seconds,
             "pipeline": _redacted_spec(self.spec),
@@ -317,7 +543,9 @@ class GtkReadOnlyApp:
         (self.private_output / "app-config.json").write_text(
             json.dumps(config, indent=2) + "\n", encoding="utf-8"
         )
-        self._event({"kind": "app_started", "read_only": True})
+        self._event(
+            {"kind": "app_started", "read_only": True, "control_mode": self.control_mode}
+        )
         if self.enable_ble:
             self.ble = ReadOnlyBleMonitor(self.address, self.state, event_handler=self._event)
             self.ble.start()
@@ -367,6 +595,18 @@ class GtkReadOnlyApp:
             error = f"{type(exc).__name__}: {exc}"
             self._event({"kind": "app_error", "error": error})
         finally:
+            if self.control and self.control.state not in {
+                ControlState.DISABLED,
+                ControlState.FAULT,
+                ControlState.DISCONNECTED,
+            }:
+                try:
+                    import asyncio
+
+                    asyncio.run(self.control.stop("app_finally"))
+                    self._flush_mock_records()
+                except Exception as exc:
+                    error = error or f"control cleanup failed: {exc}"
             self.pipeline.set_state(Gst.State.NULL)
             if self.ble:
                 try:
@@ -381,6 +621,9 @@ class GtkReadOnlyApp:
             self.events.close()
             self.states.close()
             self.metrics_writer.close()
+            for writer in (self.input_events, self.sent_commands, self.control_states):
+                if writer:
+                    writer.close()
 
         _, final = self.state.snapshot()
         ble_summary = self.ble.summary if self.ble else {
@@ -413,6 +656,22 @@ class GtkReadOnlyApp:
                 "pipeline_null": True,
                 "gnome_overview_restored": not overview_before or overview_hidden,
             },
+            "control": (
+                {
+                    **self.control.snapshot(),
+                    "mock": True,
+                    "mock_command_count": len(self.mock_sink.records),
+                    "mock_zero_count": sum(
+                        bool(record["is_zero"]) for record in self.mock_sink.records
+                    ),
+                    "fff5_write_count": self.mock_sink.fff5_write_count,
+                    "all_commands_returned_to_zero": (
+                        not self.mock_sink.records or self.mock_sink.records[-1]["is_zero"]
+                    ),
+                }
+                if self.control
+                else None
+            ),
         }
         if summary["fff5_write_count"] != 0:
             summary["error"] = summary["error"] or "read-only app FFF5 safety invariant failed"

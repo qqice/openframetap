@@ -478,8 +478,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(json.dumps({"stopped": stopped}, indent=2))
             return 0
-        if args.control_mode != "disabled":
-            print("APP_FAILED: mock/live control is not enabled until its safety controller is installed")
+        if args.control_mode == "live":
+            print("APP_FAILED: live control remains disabled until one-shot validation is complete")
             return 4
         output = args.output or Path("artifacts/private") / f"app-session-{_stamp()}"
         sanitized_output = args.sanitized_output or Path(
@@ -534,6 +534,7 @@ def main(argv: list[str] | None = None) -> int:
                 sanitized_output=sanitized_output,
                 duration_seconds=args.duration,
                 enable_ble=not args.no_ble,
+                control_mode=args.control_mode,
             ).run()
         except (OSError, RuntimeError, TimeoutError, ValueError, subprocess.SubprocessError) as exc:
             print(f"APP_FAILED: {exc}")

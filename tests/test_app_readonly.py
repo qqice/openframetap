@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 import time
 
+from openframetap.app.input import ControlInput
+from openframetap.app.runtime import GtkReadOnlyApp
 from openframetap.app.ble_status import ReadOnlyBleMonitor
 from openframetap.app.state import AppStateSnapshot, StateStore
 from openframetap.protocol.duml import encode_duml_frame
@@ -106,3 +109,30 @@ def test_readonly_ui_without_pocket_keeps_disabled_control_state() -> None:
     assert snapshot.battery_percent is None
     assert snapshot.control_state == "DISABLED"
     assert snapshot.yaw == snapshot.pitch == 0.0
+
+
+class _UnusedSpec:
+    argv = []
+
+
+def test_mock_app_installs_controller_without_fff5_path(tmp_path: Path) -> None:
+    private = tmp_path / "artifacts" / "private" / "session"
+    sanitized = tmp_path / "artifacts" / "sanitized" / "session"
+    app = GtkReadOnlyApp(
+        _UnusedSpec(),
+        address="fixture",
+        private_output=private,
+        sanitized_output=sanitized,
+        duration_seconds=10,
+        enable_ble=False,
+        control_mode="mock",
+        joystick_config_path=Path("config/control-ui.json"),
+        registry_path=tmp_path / "runtime.json",
+    )
+    app._submit_control(ControlInput(yaw=0.25, active=True, source="keyboard"))
+    assert app.control.latest_input.yaw == 0.15
+    app._mock_emergency()
+    assert app.mock_sink.fff5_write_count == 0
+    assert app.mock_sink.records[-1]["is_zero"] is True
+    for writer in (app.events, app.states, app.metrics_writer, app.input_events, app.sent_commands, app.control_states):
+        writer.close()

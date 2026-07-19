@@ -253,7 +253,10 @@ class FailClosedController:
         if self.state not in {ControlState.ARMED, ControlState.ACTIVE}:
             return
         now = self.clock_ns()
-        if self.last_input_ns is None or now - self.last_input_ns > self.config.watchdog_ms * 1_000_000:
+        if self.state == ControlState.ACTIVE and (
+            self.last_input_ns is None
+            or now - self.last_input_ns > self.config.watchdog_ms * 1_000_000
+        ):
             self.watchdog_state = "expired"
             await self._zero("watchdog_timeout", destination=ControlState.ARMED)
             return
@@ -306,4 +309,3 @@ class FailClosedController:
         finally:
             self._writer_task = None
             self._stopped.set()
-
