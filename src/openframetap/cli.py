@@ -141,6 +141,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hci_gimbal.add_argument("capture", type=Path)
     hci_gimbal.add_argument("--output", type=Path, required=True)
+    mimo_wifi_gimbal = analyze_commands.add_parser(
+        "mimo-wifi-gimbal", help="extract Mimo Wi-Fi DUML joystick evidence from DLT_RAW PCAP"
+    )
+    mimo_wifi_gimbal.add_argument("capture", type=Path)
+    mimo_wifi_gimbal.add_argument("--output", type=Path, required=True)
+    mimo_wifi_gimbal.add_argument(
+        "--actions", default="yaw_right,yaw_left,pitch_up,pitch_down"
+    )
 
     app = subcommands.add_parser("app", help="fullscreen OpenFrameTap video and control UI")
     app_mode = app.add_mutually_exclusive_group()
@@ -524,6 +532,26 @@ def main(argv: list[str] | None = None) -> int:
             "duml_frame_count", "reassembly_error_count", "gimbal_write_count",
             "command_counts",
         )}, indent=2))
+        return 0
+    if args.command == "analyze" and args.analyze_command == "mimo-wifi-gimbal":
+        from openframetap.analysis.mimo_wifi import write_mimo_wifi_analysis
+
+        labels = tuple(item.strip() for item in args.actions.split(",") if item.strip())
+        try:
+            payload = write_mimo_wifi_analysis(
+                args.capture, args.output, action_labels=labels
+            )
+        except (OSError, ValueError) as exc:
+            print(f"MIMO_WIFI_GIMBAL_ANALYSIS_FAILED: {exc}")
+            return 1
+        print(json.dumps({
+            "source_sha256": payload["source_sha256"],
+            "capture_duration_seconds": payload["capture_duration_seconds"],
+            "selected_flow": payload["selected_flow"],
+            "selected_duml_frame_count": payload["selected_duml_frame_count"],
+            "gimbal_control": payload["gimbal_control"],
+            "companion_04_50": payload["companion_04_50"],
+        }, indent=2))
         return 0
     if args.command == "app":
         from openframetap.video.player_process import ProcessRegistry

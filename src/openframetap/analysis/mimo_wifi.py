@@ -1,0 +1,318 @@
+"""Immutable PCAP/DLT_RAW analysis for DJI Mimo's Pocket 3 Wi-Fi session."""
+
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
+import socket
+import statistics
+import struct
+
+from openframetap.protocol.reassembly import DumlStreamReassembler
+
+
+DLT_RAW = 101
+_PCAP_MAGICS = {
+    b"\xd4\xc3\xb2\xa1": ("<", 1_000_000),
+    b"\xa1\xb2\xc3\xd4": (">", 1_000_000),
+    b"\x4d\x3c\xb2\xa1": ("<", 1_000_000_000),
+    b"\xa1\xb2\x3c\x4d": (">", 1_000_000_000),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class UdpDatagram:
+    index: int
+    timestamp: float
+    source: str
+    source_port: int
+    destination: str
+    destination_port: int
+    payload: bytes
+
+    @property
+    def flow(self) -> tuple[str, int, str, int]:
+        return self.source, self.source_port, self.destination, self.destination_port
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_udp(path: Path) -> tuple[list[UdpDatagram], dict]:
+    datagrams: list[UdpDatagram] = []
+    packet_count = 0
+    first: float | None = None
+    last: float | None = None
+    with path.open("rb") as stream:
+        header = stream.read(24)
+        if len(header) != 24 or header[:4] not in _PCAP_MAGICS:
+            raise ValueError("not a supported classic PCAP file")
+        endian, timestamp_scale = _PCAP_MAGICS[header[:4]]
+        _magic, major, minor, _zone, _sigfigs, _snaplen, link_type = struct.unpack(
+            endian + "IHHIIII", header
+        )
+        if (major, minor) != (2, 4) or link_type != DLT_RAW:
+            raise ValueError(f"unsupported PCAP version/link type: {major}.{minor}/{link_type}")
+        while record_header := stream.read(16):
+            if len(record_header) != 16:
+                raise ValueError("truncated PCAP record header")
+            seconds, fraction, included, original = struct.unpack(
+                endian + "IIII", record_header
+            )
+            if included > original:
+                raise ValueError("PCAP included length exceeds original length")
+            packet = stream.read(included)
+            if len(packet) != included:
+                raise ValueError("truncated PCAP record payload")
+            timestamp = seconds + fraction / timestamp_scale
+            first = timestamp if first is None else min(first, timestamp)
+            last = timestamp if last is None else max(last, timestamp)
+            index = packet_count
+            packet_count += 1
+            if len(packet) < 28 or packet[0] >> 4 != 4:
+                continue
+            ihl = (packet[0] & 0x0F) * 4
+            if ihl < 20 or len(packet) < ihl + 8 or packet[9] != 17:
+                continue
+            source = socket.inet_ntoa(packet[12:16])
+            destination = socket.inet_ntoa(packet[16:20])
+            source_port, destination_port, udp_length = struct.unpack_from(
+                "!HHH", packet, ihl
+            )
+            if udp_length < 8 or len(packet) < ihl + udp_length:
+                continue
+            datagrams.append(
+                UdpDatagram(
+                    index,
+                    timestamp,
+                    source,
+                    source_port,
+                    destination,
+                    destination_port,
+                    packet[ihl + 8 : ihl + udp_length],
+                )
+            )
+    if first is None or last is None:
+        raise ValueError("PCAP contains no records")
+    return datagrams, {
+        "pcap_packet_count": packet_count,
+        "capture_start_unix": first,
+        "capture_end_unix": last,
+        "capture_duration_seconds": last - first,
+        "link_type": link_type,
+    }
+
+
+def _frames(datagram: UdpDatagram) -> list[dict]:
+    reassembler = DumlStreamReassembler()
+    output = []
+    for event in reassembler.feed(datagram.payload) + reassembler.finish():
+        if event.kind != "frame" or event.frame is None:
+            continue
+        frame = event.frame
+        if not frame.crc8_valid or not frame.crc16_valid:
+            continue
+        output.append(
+            {
+                "datagram": datagram,
+                "offset": datagram.payload.find(frame.raw),
+                "frame": frame,
+            }
+        )
+    return output
+
+
+def _split_actions(records: list[dict], *, gap_seconds: float = 0.5) -> list[list[dict]]:
+    if not records:
+        return []
+    groups = [[records[0]]]
+    for record in records[1:]:
+        if record["datagram"].timestamp - groups[-1][-1]["datagram"].timestamp > gap_seconds:
+            groups.append([])
+        groups[-1].append(record)
+    return groups
+
+
+def _median(records: list[tuple], index: int) -> float | None:
+    return statistics.median(item[index] for item in records) if records else None
+
+
+def _wrapped_delta(after: float | None, before: float | None, period: int) -> float | None:
+    if after is None or before is None:
+        return None
+    return (after - before + period / 2) % period - period / 2
+
+
+def analyze_mimo_wifi_gimbal(
+    path: Path,
+    *,
+    action_labels: tuple[str, ...] = ("yaw_right", "yaw_left", "pitch_up", "pitch_down"),
+) -> dict:
+    datagrams, metadata = _read_udp(path)
+    parsed: list[dict] = []
+    control_by_flow: dict[tuple[str, int, str, int], list[dict]] = defaultdict(list)
+    for datagram in datagrams:
+        for item in _frames(datagram):
+            parsed.append(item)
+            frame = item["frame"]
+            if (
+                frame.sender == 0x02
+                and frame.receiver == 0x04
+                and frame.cmd_set == 0x04
+                and frame.cmd_id == 0x01
+            ):
+                control_by_flow[datagram.flow].append(item)
+    if not control_by_flow:
+        raise ValueError("no app-to-gimbal 04/01 flow found")
+    upstream_flow, controls = max(control_by_flow.items(), key=lambda item: len(item[1]))
+    reverse_flow = (
+        upstream_flow[2], upstream_flow[3], upstream_flow[0], upstream_flow[1]
+    )
+    selected = [
+        item
+        for item in parsed
+        if item["datagram"].flow in {upstream_flow, reverse_flow}
+    ]
+    selected.sort(key=lambda item: item["datagram"].timestamp)
+    direction_counts: Counter[str] = Counter()
+    for item in selected:
+        direction = "app_to_pocket" if item["datagram"].flow == upstream_flow else "pocket_to_app"
+        frame = item["frame"]
+        direction_counts[f"{direction}:{frame.cmd_set:02X}/{frame.cmd_id:02X}"] += 1
+
+    groups = _split_actions(controls)
+    action_summaries = []
+    telemetry = []
+    for item in selected:
+        frame = item["frame"]
+        if item["datagram"].flow != reverse_flow or (frame.cmd_set, frame.cmd_id) != (4, 5):
+            continue
+        payload = frame.payload
+        if len(payload) >= 24:
+            telemetry.append(
+                (
+                    item["datagram"].timestamp,
+                    struct.unpack_from("<h", payload, 16)[0],
+                    struct.unpack_from("<h", payload, 20)[0],
+                    struct.unpack_from("<h", payload, 22)[0],
+                )
+            )
+
+    neutral = bytes.fromhex("00040000000400804200")
+    for index, group in enumerate(groups):
+        label = action_labels[index] if index < len(action_labels) else f"action_{index + 1}"
+        layouts = [struct.unpack("<5H", item["frame"].payload) for item in group if len(item["frame"].payload) == 10]
+        if not layouts:
+            continue
+        axis_index = 2 if label.startswith("yaw") else 0
+        active = [
+            (item, values)
+            for item, values in zip(group, layouts, strict=True)
+            if abs(values[axis_index] - 1024) > 20
+        ]
+        active_start = active[0][0]["datagram"].timestamp if active else group[0]["datagram"].timestamp
+        active_end = active[-1][0]["datagram"].timestamp if active else group[-1]["datagram"].timestamp
+        pre = [row for row in telemetry if active_start - 1 <= row[0] < active_start]
+        post = [row for row in telemetry if active_end < row[0] <= active_end + 1]
+        before_yaw, after_yaw = _median(pre, 1), _median(post, 1)
+        before_pitch, after_pitch = _median(pre, 2), _median(post, 2)
+        action_summaries.append(
+            {
+                "label": label,
+                "frame_count": len(group),
+                "active_frame_count": len(active),
+                "start_seconds": group[0]["datagram"].timestamp - metadata["capture_start_unix"],
+                "end_seconds": group[-1]["datagram"].timestamp - metadata["capture_start_unix"],
+                "active_duration_seconds": active_end - active_start,
+                "send_rate_hz": (
+                    (len(group) - 1)
+                    / (group[-1]["datagram"].timestamp - group[0]["datagram"].timestamp)
+                    if len(group) > 1
+                    and group[-1]["datagram"].timestamp > group[0]["datagram"].timestamp
+                    else None
+                ),
+                "exact_neutral_frame_count": sum(item["frame"].payload == neutral for item in group),
+                "first_payload_hex": group[0]["frame"].payload.hex(),
+                "last_payload_hex": group[-1]["frame"].payload.hex(),
+                "uint16_le_fields": [
+                    {
+                        "offset": field * 2,
+                        "minimum": min(values[field] for values in layouts),
+                        "maximum": max(values[field] for values in layouts),
+                        "median": statistics.median(values[field] for values in layouts),
+                        "unique_count": len({values[field] for values in layouts}),
+                    }
+                    for field in range(5)
+                ],
+                "telemetry_before": {"yaw_offset16": before_yaw, "pitch_offset20": before_pitch},
+                "telemetry_after": {"yaw_offset16": after_yaw, "pitch_offset20": after_pitch},
+                "telemetry_delta": {
+                    "yaw_offset16_wrapped_period36000": _wrapped_delta(after_yaw, before_yaw, 36000),
+                    "pitch_offset20": None if after_pitch is None or before_pitch is None else after_pitch - before_pitch,
+                },
+            }
+        )
+
+    companion_up = [
+        item for item in selected
+        if item["datagram"].flow == upstream_flow
+        and (item["frame"].cmd_set, item["frame"].cmd_id) == (4, 0x50)
+    ]
+    companion_down = [
+        item for item in selected
+        if item["datagram"].flow == reverse_flow
+        and (item["frame"].cmd_set, item["frame"].cmd_id) == (4, 0x50)
+    ]
+    return {
+        "source_file": path.name,
+        "source_sha256": _sha256(path),
+        **metadata,
+        "udp_datagram_count": len(datagrams),
+        "selected_flow": {
+            "phone_ip": upstream_flow[0],
+            "phone_port": upstream_flow[1],
+            "pocket_ip": upstream_flow[2],
+            "pocket_port": upstream_flow[3],
+        },
+        "selected_duml_frame_count": len(selected),
+        "command_counts": dict(sorted(direction_counts.items())),
+        "gimbal_control": {
+            "cmd_set": 4,
+            "cmd_id": 1,
+            "sender": 2,
+            "receiver": 4,
+            "flags": sorted({item["frame"].flags for item in controls}),
+            "frame_count": len(controls),
+            "payload_lengths": dict(Counter(len(item["frame"].payload) for item in controls)),
+            "duml_offsets": dict(Counter(item["offset"] for item in controls)),
+            "neutral_payload_hex": neutral.hex(),
+            "neutral_payload_count": sum(item["frame"].payload == neutral for item in controls),
+            "action_groups": action_summaries,
+        },
+        "companion_04_50": {
+            "request_count": len(companion_up),
+            "response_count": len(companion_down),
+            "request_payloads": sorted({item["frame"].payload.hex() for item in companion_up}),
+            "response_payloads": sorted({item["frame"].payload.hex() for item in companion_down}),
+        },
+    }
+
+
+def write_mimo_wifi_analysis(
+    source: Path,
+    output: Path,
+    *,
+    action_labels: tuple[str, ...] = ("yaw_right", "yaw_left", "pitch_up", "pitch_down"),
+) -> dict:
+    result = analyze_mimo_wifi_gimbal(source, action_labels=action_labels)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return result
