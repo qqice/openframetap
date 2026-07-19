@@ -86,6 +86,8 @@ class LiveWifiControlSession:
             "max_offset": self._max_offset,
             "transport_ack_count": 0,
             "last_ack_sequence": None,
+            "keepalive_sent_count": 0,
+            "keepalive_response_count": 0,
         }
 
     def _set(self, **values) -> None:
@@ -155,6 +157,8 @@ class LiveWifiControlSession:
                 self._set(
                     transport_ack_count=getattr(transport, "ack_observed_count", 0),
                     last_ack_sequence=getattr(transport, "last_ack_sequence", None),
+                    keepalive_sent_count=getattr(transport, "keepalive_sent_count", 0),
+                    keepalive_response_count=getattr(transport, "keepalive_response_count", 0),
                 )
                 data = record.to_dict()
                 data["kind"] = "udp_received"
@@ -188,6 +192,22 @@ class LiveWifiControlSession:
             receiver = asyncio.create_task(receive(), name="live-wifi-telemetry")
             await asyncio.wait_for(udp_ready.wait(), timeout=1.0)
             await controller.start_watchdog()
+
+            async def send_verified_keepalive() -> None:
+                expected = transport.keepalive_response_count + 1
+                await transport.send_control_keepalive()
+                deadline = time.monotonic() + 0.5
+                while transport.keepalive_response_count < expected:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Pocket 04/50 control keepalive response timed out")
+                    await asyncio.sleep(0.01)
+                self._set(
+                    keepalive_sent_count=transport.keepalive_sent_count,
+                    keepalive_response_count=transport.keepalive_response_count,
+                )
+
+            await send_verified_keepalive()
+            last_keepalive_send_ns = time.monotonic_ns()
             await controller.arm(WifiControlPrerequisites(*([True] * 9)))
             self._ready.set()
             self._set(state="armed", watchdog="healthy", last_center_ns=controller.last_center_ns)
@@ -248,6 +268,9 @@ class LiveWifiControlSession:
                 if not self.state.snapshot()[1].ble_connected:
                     await controller.emergency_stop("ble_disconnected")
                     raise RuntimeError("BLE disconnected during live control")
+                if now - last_keepalive_send_ns >= 1_000_000_000:
+                    await send_verified_keepalive()
+                    last_keepalive_send_ns = time.monotonic_ns()
                 stale = not value.monotonic_ns or now - value.monotonic_ns > 250_000_000
                 quantized = Pocket3StickCommand.from_axes(
                     yaw_axis=value.yaw / LIVE_MAXIMUM_INPUT,

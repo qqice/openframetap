@@ -16,7 +16,10 @@ from openframetap.control.gimbal_controller import (
 )
 from openframetap.control.gimbal_profile import (
     CENTER_STICK_COMMAND,
+    CONTROL_KEEPALIVE_RESPONSE,
     Pocket3StickCommand,
+    decode_control_keepalive_response,
+    encode_control_keepalive,
     validate_stick_duml,
 )
 from openframetap.protocol.dji_wifi import (
@@ -60,6 +63,13 @@ def test_center_payload_and_structured_duml_are_exact() -> None:
     assert CENTER_STICK_COMMAND.encode_payload().hex() == "00040000000400804200"
     frame = CENTER_STICK_COMMAND.encode_duml(sequence=0x1234)
     assert validate_stick_duml(frame) == CENTER_STICK_COMMAND
+
+
+def test_control_keepalive_matches_mimo_capture_exactly() -> None:
+    request = encode_control_keepalive(sequence=0x6BB6)
+    assert request.hex() == "5510045602046bb6400450010405a3da"
+    response = bytes.fromhex("551504a904026bb680045000010401000501018ecc")
+    assert decode_control_keepalive_response(response) == 0x6BB6
 
 
 def test_fixed_fields_roll_ranges_and_axes_fail_closed() -> None:
@@ -186,6 +196,50 @@ def test_transport_ack_updates_next_operator_envelope_peer_sequence() -> None:
         assert transport.ack_observed_count == 1
         assert transport.last_ack_sequence == 0x82B0
         assert DjiWifiEnvelope.parse(sent[-1]).peer_sequence == 0x82B0
+
+    asyncio.run(scenario())
+
+
+def test_transport_matches_control_keepalive_response_by_duml_sequence() -> None:
+    async def scenario() -> None:
+        transport = DjiWifiUdpTransport("192.168.2.1")
+        transport.socket = object()
+        transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82B0, 0x82A8)
+        sent = []
+
+        async def sendto(data):
+            sent.append(data)
+
+        transport._sendto = sendto
+        record = await transport.send_control_keepalive()
+        request = DjiWifiEnvelope.parse(sent[-1])
+        assert request.payload == encode_control_keepalive(sequence=record["duml_sequence"])
+
+        response_duml = encode_duml_frame(
+            sender=4,
+            receiver=2,
+            sequence=record["duml_sequence"],
+            flags=0x80,
+            cmd_set=4,
+            cmd_id=0x50,
+            payload=CONTROL_KEEPALIVE_RESPONSE,
+        )
+        response = DjiWifiEnvelope.operator_command(
+            response_duml,
+            session_id=0x7055,
+            transport_sequence=0x82B0,
+            peer_sequence=0x82A8,
+            message_sequence=0x0101,
+        ).encode()
+
+        async def recvfrom(_size):
+            return response, ("192.168.2.1", 9004)
+
+        transport._recvfrom = recvfrom
+        await transport.receive_datagram()
+        assert transport.keepalive_sent_count == 1
+        assert transport.keepalive_response_count == 1
+        assert not transport.pending_keepalives
 
     asyncio.run(scenario())
 

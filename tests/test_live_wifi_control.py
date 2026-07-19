@@ -22,6 +22,10 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
             self.is_open = False
             self.commands: list[Pocket3StickCommand] = []
             self.received = 0
+            self.ack_observed_count = 0
+            self.last_ack_sequence = None
+            self.keepalive_sent_count = 0
+            self.keepalive_response_count = 0
             self.__class__.instances.append(self)
 
         async def open(self) -> None:
@@ -30,6 +34,11 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
         async def send_stick(self, command, *, reason):
             self.commands.append(command)
             return {"reason": reason}
+
+        async def send_control_keepalive(self):
+            self.keepalive_sent_count += 1
+            self.keepalive_response_count += 1
+            return {"kind": "control_keepalive"}
 
         async def receive_datagram(self):
             if self.received == 0:
@@ -64,6 +73,7 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
     while session.snapshot()["state"] != "armed" and time.monotonic() < deadline:
         time.sleep(0.01)
     assert session.snapshot()["state"] == "armed"
+    assert session.snapshot()["keepalive_response_count"] >= 1
     # Values just outside the GUI curve's deadzone may be non-zero floats but
     # still quantize to the protocol center.  They must remain safely armed,
     # not fault the strict non-center writer.

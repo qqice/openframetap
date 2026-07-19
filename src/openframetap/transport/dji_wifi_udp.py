@@ -12,7 +12,12 @@ import time
 from datetime import datetime, timezone
 from typing import Callable
 
-from openframetap.control.gimbal_profile import Pocket3StickCommand, validate_stick_duml
+from openframetap.control.gimbal_profile import (
+    Pocket3StickCommand,
+    decode_control_keepalive_response,
+    encode_control_keepalive,
+    validate_stick_duml,
+)
 from openframetap.protocol.dji_wifi import (
     DjiWifiBasicHeader,
     DjiWifiEnvelope,
@@ -191,6 +196,10 @@ class DjiWifiUdpTransport:
         self.sent_records: list[dict] = []
         self.ack_observed_count = 0
         self.last_ack_sequence: int | None = None
+        self.keepalive_sent_count = 0
+        self.keepalive_response_count = 0
+        self.last_keepalive_response_ns: int | None = None
+        self.pending_keepalives: dict[int, int] = {}
 
     @property
     def is_open(self) -> bool:
@@ -299,6 +308,48 @@ class DjiWifiUdpTransport:
             finally:
                 self._owner_task = None
 
+    async def send_control_keepalive(self) -> dict:
+        """Send only the exact capture-verified 04/50 control keepalive."""
+
+        if self.socket is None or self.sequencer is None:
+            raise RuntimeError("UDP control transport is not open and handshaken")
+        task = asyncio.current_task()
+        if self._owner_task is not None and self._owner_task is not task:
+            raise RuntimeError("single-writer violation")
+        async with self._writer_lock:
+            self._owner_task = task
+            duml_sequence = self.duml_sequence
+            self.pending_keepalives[duml_sequence] = time.monotonic_ns()
+            try:
+                duml = encode_control_keepalive(sequence=duml_sequence)
+                envelope = self.sequencer.build(duml)
+                envelope.validate_operator_policy()
+                datagram = envelope.encode()
+                await self._sendto(datagram)
+                self.duml_sequence = (self.duml_sequence + 1) & 0xFFFF
+                self.keepalive_sent_count += 1
+                record = {
+                    "wall_time_utc": _utc_now(),
+                    "monotonic_ns": time.monotonic_ns(),
+                    "kind": "control_keepalive",
+                    "target_ip": self.target_ip,
+                    "target_port": self.target_port,
+                    "local_port": self.local_port,
+                    "transport_sequence": envelope.transport_sequence,
+                    "message_sequence": envelope.message_sequence,
+                    "duml_sequence": duml_sequence,
+                    "duml_hex": duml.hex(),
+                    "datagram_hex": datagram.hex(),
+                }
+                self.sent_records.append(record)
+                self.event_handler(record)
+                return record
+            except BaseException:
+                self.pending_keepalives.pop(duml_sequence, None)
+                raise
+            finally:
+                self._owner_task = None
+
     async def receive_datagram(self, *, maximum_size: int = 65535) -> UdpReceiveRecord:
         """Receive only from the already validated Pocket peer.
 
@@ -334,6 +385,24 @@ class DjiWifiUdpTransport:
                     "kind": "transport_ack_observed",
                     "ack_sequence": basic.transport_sequence,
                     "ack_observed_count": self.ack_observed_count,
+                }
+            )
+        try:
+            envelope = DjiWifiEnvelope.parse(data)
+            keepalive_sequence = decode_control_keepalive_response(envelope.payload)
+        except Exception:
+            keepalive_sequence = None
+        if keepalive_sequence is not None and keepalive_sequence in self.pending_keepalives:
+            self.pending_keepalives.pop(keepalive_sequence, None)
+            self.keepalive_response_count += 1
+            self.last_keepalive_response_ns = time.monotonic_ns()
+            self.event_handler(
+                {
+                    "wall_time_utc": _utc_now(),
+                    "monotonic_ns": self.last_keepalive_response_ns,
+                    "kind": "control_keepalive_response",
+                    "duml_sequence": keepalive_sequence,
+                    "response_count": self.keepalive_response_count,
                 }
             )
         return UdpReceiveRecord(

@@ -19,6 +19,8 @@ INITIAL_TEST_MAX_OFFSET = 16
 LIVE_PROTOTYPE_MIN_OFFSET = 16
 LIVE_PROTOTYPE_DEFAULT_OFFSET = 96
 LIVE_PROTOTYPE_MAX_OFFSET = 188
+CONTROL_KEEPALIVE_REQUEST = bytes.fromhex("010405")
+CONTROL_KEEPALIVE_RESPONSE = bytes.fromhex("0001040100050101")
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +85,40 @@ class Pocket3StickCommand:
 
 
 CENTER_STICK_COMMAND = Pocket3StickCommand()
+
+
+def encode_control_keepalive(*, sequence: int) -> bytes:
+    """Build the exact 1 Hz Mimo-observed 04/50 control-session keepalive."""
+
+    frame = encode_duml_frame(
+        sender=0x02,
+        receiver=0x04,
+        sequence=sequence,
+        flags=0x40,
+        cmd_set=0x04,
+        cmd_id=0x50,
+        payload=CONTROL_KEEPALIVE_REQUEST,
+    )
+    decoded = decode_duml_frame(frame)
+    if not decoded.crc8_valid or not decoded.crc16_valid:
+        raise RuntimeError("internally generated 04/50 keepalive failed CRC validation")
+    return frame
+
+
+def decode_control_keepalive_response(raw: bytes) -> int:
+    frame = decode_duml_frame(raw)
+    if not frame.crc8_valid or not frame.crc16_valid:
+        raise ValueError("04/50 keepalive response CRC validation failed")
+    if (
+        frame.sender,
+        frame.receiver,
+        frame.flags,
+        frame.cmd_set,
+        frame.cmd_id,
+        frame.payload,
+    ) != (0x04, 0x02, 0x80, 0x04, 0x50, CONTROL_KEEPALIVE_RESPONSE):
+        raise ValueError("response is not the exact captured 04/50 keepalive response")
+    return frame.sequence
 
 
 def validate_stick_duml(raw: bytes) -> Pocket3StickCommand:
