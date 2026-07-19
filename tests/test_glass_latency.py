@@ -10,11 +10,16 @@ import pytest
 np = pytest.importorskip("numpy")
 cv2 = pytest.importorskip("cv2")
 
-from openframetap.analysis.glass_latency.decoder import decode_pattern, rectify_roi
+from openframetap.analysis.glass_latency.decoder import (
+    decode_pattern,
+    detect_green_pattern_quad,
+    rectify_roi,
+)
 from openframetap.analysis.glass_latency.models import ROI, ROIConfig, parse_transform
 from openframetap.analysis.glass_latency.session import (
     analyze_glass_latency,
     sanitized_peer,
+    rescale_capture_timestamps,
     validate_phone_fps,
 )
 from openframetap.analysis.glass_latency.statistics import (
@@ -80,6 +85,42 @@ def test_low_contrast_pattern_fails_closed() -> None:
     assert decoded.reason == "low_contrast"
 
 
+def test_colored_moire_in_black_cell_is_rejected_as_white() -> None:
+    image = _bgr(158)
+    layout = pattern_layout(16)
+    # Gray(158) bit 14 is zero.  A purple alias can have high HSV Value and
+    # ordinary luma even though it is not an achromatic white pattern cell.
+    for rect in (layout.top_bits[14], layout.bottom_bits[14]):
+        x0, y0, x1, y1 = rect.pixels(1600, 900)
+        image[y0:y1, x0:x1] = (243, 204, 213)
+    decoded = decode_pattern(image)
+    assert decoded.valid
+    assert decoded.frame_id == 158
+
+
+def test_mildly_tinted_white_cell_remains_white() -> None:
+    image = _bgr(158)
+    layout = pattern_layout(16)
+    # Gray(158) bit 11 is one.  Mild white-balance tint must not turn it black.
+    for rect in (layout.top_bits[11], layout.bottom_bits[11]):
+        x0, y0, x1, y1 = rect.pixels(1600, 900)
+        image[y0:y1, x0:x1] = (230, 215, 225)
+    decoded = decode_pattern(image)
+    assert decoded.valid
+    assert decoded.frame_id == 158
+
+
+def test_screen_reference_normalization_handles_cyan_dsi_white() -> None:
+    image = _bgr(31337)
+    white = np.all(image > 200, axis=2)
+    black = np.all(image < 30, axis=2)
+    image[white] = (254, 240, 172)
+    image[black] = (22, 11, 9)
+    decoded = decode_pattern(image)
+    assert decoded.valid
+    assert decoded.frame_id == 31337
+
+
 def test_single_bit_bank_error_is_mixed_refresh() -> None:
     image = _bgr(99)
     rect = pattern_layout(16).bottom_bits[0]
@@ -103,6 +144,32 @@ def test_perspective_rectification_recovers_pattern() -> None:
         tuple(tuple(map(float, point)) for point in quad),
     )
     assert decode_pattern(corrected).frame_id == 777
+
+
+def test_green_border_tracker_recovers_handheld_quad() -> None:
+    source = _bgr(778)
+    source_points = np.float32([[0, 0], [1599, 0], [1599, 899], [0, 899]])
+    quad = np.float32([[100, 70], [1810, 120], [1710, 1080], [150, 1020]])
+    matrix = cv2.getPerspectiveTransform(source_points, quad)
+    photographed = cv2.warpPerspective(source, matrix, (2000, 1200))
+    detected = detect_green_pattern_quad(photographed, ROI(0, 0, 2000, 1200))
+    assert detected is not None
+    corrected = rectify_roi(photographed, ROI(0, 0, 2000, 1200), detected)
+    assert decode_pattern(corrected).frame_id == 778
+
+
+def test_green_border_tracker_combines_fragmented_outer_edges() -> None:
+    source = _bgr(779)
+    # Break every edge away from the corners; no individual border contour can
+    # describe the full screen, but the combined green-pixel hull still can.
+    source[0:8, 500:1100] = 0
+    source[-8:, 500:1100] = 0
+    source[250:650, 0:8] = 0
+    source[250:650, -8:] = 0
+    detected = detect_green_pattern_quad(source, ROI(0, 0, 1600, 900))
+    assert detected is not None
+    corrected = rectify_roi(source, ROI(0, 0, 1600, 900), detected)
+    assert decode_pattern(corrected).frame_id == 779
 
 
 def test_sixteen_bit_unwrap_and_timing_lookup(tmp_path: Path) -> None:
@@ -144,6 +211,15 @@ def test_latency_statistics_percentiles_and_invalid_exclusion() -> None:
     assert summary["p99_latency_ms"] == pytest.approx(97.6)
     assert percentile(values, 90) == pytest.approx(76.0)
     assert latency_statistics([])["median_latency_ms"] is None
+
+
+def test_decoder_confidence_gate_rejects_borderline_bit() -> None:
+    image = _bgr(158)
+    layout = pattern_layout(16)
+    for rect in (layout.top_bits[0], layout.bottom_bits[0]):
+        x0, y0, x1, y1 = rect.pixels(1600, 900)
+        image[y0:y1, x0:x1] = 133
+    assert not decode_pattern(image).valid
 
 
 def test_phone_sampling_run_length_is_not_called_a_decoder_drop() -> None:
@@ -200,6 +276,16 @@ def test_invalid_phone_fps_metadata_fails_closed() -> None:
         validate_phone_fps(None)
     with pytest.raises(ValueError, match="phone fps"):
         validate_phone_fps(2000.0)
+
+
+def test_slow_motion_pts_are_rescaled_to_capture_time() -> None:
+    timestamps, scale = rescale_capture_timestamps(
+        [10.0, 10.0 + 1 / 30, 10.0 + 2 / 30],
+        encoded_fps=30.0,
+        capture_fps=240.0,
+    )
+    assert scale == pytest.approx(0.125)
+    assert timestamps[-1] == pytest.approx(2 / 240)
 
 
 def test_missing_pattern_log_is_explicit(tmp_path: Path) -> None:

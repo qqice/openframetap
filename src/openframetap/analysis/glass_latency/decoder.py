@@ -44,32 +44,73 @@ class PatternDecode:
         return asdict(self)
 
 
-def _mean_rect(gray: Any, rect: NormalizedRect) -> float:
-    height, width = gray.shape[:2]
+def _mean_rect(image: Any, rect: NormalizedRect):
+    height, width = image.shape[:2]
     x0, y0, x1, y1 = rect.pixels(width, height)
     margin_x = max(1, (x1 - x0) // 6)
     margin_y = max(1, (y1 - y0) // 6)
-    sample = gray[y0 + margin_y : y1 - margin_y, x0 + margin_x : x1 - margin_x]
+    sample = image[y0 + margin_y : y1 - margin_y, x0 + margin_x : x1 - margin_x]
     if sample.size == 0:
         raise ValueError("pattern cell falls outside rectified ROI")
-    return float(sample.mean())
+    if len(sample.shape) == 2:
+        return float(sample.mean())
+    return sample.astype("float32").mean(axis=(0, 1))
 
 
 def decode_bank(
-    gray: Any,
+    image: Any,
     rects: tuple[NormalizedRect, ...],
     black_reference: NormalizedRect,
     white_reference: NormalizedRect,
     *,
     invert: bool = False,
     minimum_contrast: float = 35.0,
-    minimum_confidence: float = 0.18,
+    minimum_confidence: float = 0.10,
 ) -> BankDecode:
-    black_sample = _mean_rect(gray, black_reference)
-    white_sample = _mean_rect(gray, white_reference)
-    dark, bright = sorted((black_sample, white_sample))
-    contrast = bright - dark
-    values = tuple(_mean_rect(gray, rect) for rect in rects)
+    import numpy as np
+
+    first_reference = _mean_rect(image, black_reference)
+    second_reference = _mean_rect(image, white_reference)
+    raw_values = tuple(_mean_rect(image, rect) for rect in rects)
+    if np.isscalar(first_reference):
+        dark, bright = sorted((float(first_reference), float(second_reference)))
+        contrast = bright - dark
+        values = tuple(float(value) for value in raw_values)
+    else:
+        first = np.asarray(first_reference, dtype=np.float32)
+        second = np.asarray(second_reference, dtype=np.float32)
+        dark_vector, bright_vector = (
+            (first, second) if first.mean() <= second.mean() else (second, first)
+        )
+        channel_range = bright_vector - dark_vector
+        observed_contrast = float(np.sqrt(np.mean(np.square(channel_range))))
+        if observed_contrast < minimum_contrast:
+            values = tuple(float(np.asarray(value).mean()) for value in raw_values)
+            return BankDecode(
+                None,
+                None,
+                (),
+                values,
+                None,
+                float(dark_vector.mean()),
+                float(bright_vector.mean()),
+                observed_contrast,
+                0.0,
+                False,
+                "low_contrast",
+            )
+        fallback = max(float(channel_range.mean()), 1.0)
+        channel_range = np.where(channel_range >= 10.0, channel_range, fallback)
+
+        def achromatic_score(sample) -> float:
+            normalized = (np.asarray(sample, dtype=np.float32) - dark_vector) / channel_range
+            minimum = float(normalized.min())
+            chroma = float(normalized.max() - minimum)
+            return float(np.clip(minimum - 3.0 * chroma, 0.0, 1.0) * 255.0)
+
+        dark, bright = 0.0, 255.0
+        contrast = 255.0
+        values = tuple(achromatic_score(value) for value in raw_values)
     if contrast < minimum_contrast:
         return BankDecode(
             None,
@@ -116,16 +157,19 @@ def decode_pattern(
     bits: int = 16,
     invert: bool = False,
     minimum_contrast: float = 35.0,
-    minimum_confidence: float = 0.18,
+    minimum_confidence: float = 0.10,
 ) -> PatternDecode:
-    import cv2
-
     if image is None or getattr(image, "size", 0) == 0:
         raise ValueError("cannot decode an empty image")
-    gray = image if len(image.shape) == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Camera/display moire creates bright but strongly chromatic purple bands in
+    # nominally black cells.  Decode achromatic brightness instead of ordinary
+    # luma or HSV Value: a true white cell has all three channels high, while a
+    # colour alias is penalized by its channel spread.  The fixed coefficient is
+    # intentionally conservative and is covered by synthetic and real-frame
+    # regression tests; this is not an adaptive search for a convenient answer.
     layout = pattern_layout(bits)
     top = decode_bank(
-        gray,
+        image,
         layout.top_bits,
         layout.top_black_reference,
         layout.top_white_reference,
@@ -134,7 +178,7 @@ def decode_pattern(
         minimum_confidence=minimum_confidence,
     )
     bottom = decode_bank(
-        gray,
+        image,
         layout.bottom_bits,
         layout.bottom_black_reference,
         layout.bottom_white_reference,
@@ -198,3 +242,87 @@ def rectify_roi(
     )
     matrix = cv2.getPerspectiveTransform(source, destination)
     return cv2.warpPerspective(frame, matrix, (width, height), flags=cv2.INTER_LINEAR)
+
+
+def order_quad(points: Any) -> tuple[tuple[float, float], ...]:
+    import numpy as np
+
+    array = np.asarray(points, dtype=np.float32).reshape(4, 2)
+    sums = array.sum(axis=1)
+    differences = array[:, 0] - array[:, 1]
+    ordered = (
+        array[int(sums.argmin())],
+        array[int(differences.argmax())],
+        array[int(sums.argmax())],
+        array[int(differences.argmin())],
+    )
+    return tuple((float(point[0]), float(point[1])) for point in ordered)
+
+
+def detect_green_pattern_quad(
+    frame: Any,
+    roi,
+    *,
+    minimum_pixels: int = 80,
+    maximum_detection_width: int = 1000,
+) -> tuple[tuple[float, float], ...] | None:
+    """Track the outer green ROI border; internal arrow pixels stay inside its hull."""
+
+    import cv2
+    import numpy as np
+
+    frame_height, frame_width = frame.shape[:2]
+    if roi.x + roi.width > frame_width or roi.y + roi.height > frame_height:
+        raise ValueError("ROI exceeds video frame bounds")
+    crop = frame[roi.y : roi.y + roi.height, roi.x : roi.x + roi.width]
+    scale = min(1.0, maximum_detection_width / max(crop.shape[1], 1))
+    if scale < 1.0:
+        crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(
+        hsv,
+        np.array([35, 70, 45], dtype=np.uint8),
+        np.array([100, 255, 255], dtype=np.uint8),
+    )
+    if cv2.countNonZero(mask) < minimum_pixels:
+        return None
+    contours, _hierarchy = cv2.findContours(
+        mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return None
+    candidates = []
+    # Exposure and rolling-shutter bands can split the thin outer border into
+    # several contours.  Its pixels still surround the internal green arrow,
+    # so their combined convex hull is the strongest candidate.  Individual
+    # contours remain as a fallback for frames containing isolated green noise.
+    all_green = cv2.findNonZero(mask)
+    hulls = [cv2.convexHull(all_green)] if all_green is not None else []
+    hulls.extend(
+        cv2.convexHull(contour)
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:20]
+    )
+    for hull in hulls:
+        perimeter = cv2.arcLength(hull, True)
+        approximation = cv2.approxPolyDP(hull, 0.02 * perimeter, True)
+        if len(approximation) == 4:
+            box = approximation.reshape(4, 2).astype(np.float32)
+        else:
+            box = cv2.boxPoints(cv2.minAreaRect(hull))
+        box[:, 0] = box[:, 0] / scale + roi.x
+        box[:, 1] = box[:, 1] / scale + roi.y
+        ordered = order_quad(box)
+        points = np.asarray(ordered, dtype=np.float32)
+        top = float(np.linalg.norm(points[1] - points[0]))
+        bottom = float(np.linalg.norm(points[2] - points[3]))
+        left = float(np.linalg.norm(points[3] - points[0]))
+        right = float(np.linalg.norm(points[2] - points[1]))
+        width = (top + bottom) / 2.0
+        height = (left + right) / 2.0
+        if min(width, height) <= 0:
+            continue
+        aspect = max(width, height) / min(width, height)
+        area_ratio = abs(cv2.contourArea(points)) / (roi.width * roi.height)
+        if 1.35 <= aspect <= 2.35 and area_ratio >= 0.20:
+            candidates.append((area_ratio, ordered))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None

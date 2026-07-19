@@ -46,8 +46,8 @@ class ROIConfig:
     dsi: ROI
     source_transform: tuple[tuple[float, float], ...] | None = None
     dsi_transform: tuple[tuple[float, float], ...] | None = None
-    rectified_width: int = 1600
-    rectified_height: int = 900
+    rectified_width: int = 960
+    rectified_height: int = 540
 
     def to_dict(self) -> dict:
         payload = asdict(self)

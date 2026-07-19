@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 import shutil
 
-from openframetap.analysis.glass_latency.decoder import decode_pattern, rectify_roi
+from openframetap.analysis.glass_latency.decoder import (
+    decode_pattern,
+    detect_green_pattern_quad,
+    rectify_roi,
+)
 from openframetap.analysis.glass_latency.models import ROI, ROIConfig
 from openframetap.analysis.glass_latency.plots import write_latency_plots
 from openframetap.analysis.glass_latency.statistics import latency_statistics, run_length_encode
@@ -88,6 +92,18 @@ def validate_phone_fps(value: float | None) -> float:
     return float(value)
 
 
+def rescale_capture_timestamps(
+    encoded_timestamps: list[float], *, encoded_fps: float, capture_fps: float
+) -> tuple[list[float], float]:
+    if not encoded_timestamps:
+        return [], 1.0
+    validate_phone_fps(encoded_fps)
+    validate_phone_fps(capture_fps)
+    scale = encoded_fps / capture_fps
+    origin = encoded_timestamps[0]
+    return [(value - origin) * scale for value in encoded_timestamps], scale
+
+
 def analyze_glass_latency(
     video_path: Path,
     *,
@@ -118,6 +134,12 @@ def analyze_glass_latency(
     effective_fps = validate_phone_fps(
         phone_fps or metadata.get("average_fps") or metadata.get("nominal_fps")
     )
+    encoded_fps = validate_phone_fps(
+        metadata.get("average_fps") or metadata.get("nominal_fps")
+    )
+    capture_timestamps, timestamp_scale = rescale_capture_timestamps(
+        timestamps, encoded_fps=encoded_fps, capture_fps=effective_fps
+    )
     first_frame = first_video_frame(video_path)
     if interactive_roi:
         source_values, dsi_values = select_rois_interactively(first_frame)
@@ -139,12 +161,20 @@ def analyze_glass_latency(
         "input_file": str(video_path.resolve()),
         "input_sha256_before": video_hash_before,
         "phone_fps_used": effective_fps,
+        "encoded_timeline_fps": encoded_fps,
+        "slow_motion_timestamp_scale": timestamp_scale,
+        "estimated_real_capture_duration_seconds": (
+            capture_timestamps[-1] - capture_timestamps[0]
+            if len(capture_timestamps) > 1
+            else 0.0
+        ),
         "phone_model": phone_model,
         "ambient_lighting_notes": ambient_notes,
         "pattern_log_file": str(pattern_log.resolve()),
         "pattern_refresh_hz": timing.refresh_hz,
         "pattern_timestamp_kind": "application_submission_monotonic_ns",
         "actual_pattern_present_timestamp_available": False,
+        "decoder_minimum_bit_confidence": 0.10,
         "pocket_stream": "H.264 High 1280x720 approximately 29.97 fps",
         "pipeline_profile": pipeline_profile,
         "decoder": "mppvideodec",
@@ -167,17 +197,36 @@ def analyze_glass_latency(
         ok, frame = capture.read()
         if not ok or frame is None:
             break
+        source_transform_used = source_transform or detect_green_pattern_quad(
+            frame, source_roi
+        )
+        dsi_transform_used = dsi_transform or detect_green_pattern_quad(frame, dsi_roi)
+        if source_transform_used is None or dsi_transform_used is None:
+            failed = {
+                "phone_frame_index": index,
+                "phone_video_timestamp": timestamps[index],
+                "phone_capture_timestamp": capture_timestamps[index],
+                "reason": (
+                    "source_green_border_not_found"
+                    if source_transform_used is None
+                    else "dsi_green_border_not_found"
+                ),
+            }
+            decoded_records.append(failed)
+            invalid_records.append(failed)
+            index += 1
+            continue
         source_image = rectify_roi(
             frame,
             source_roi,
-            source_transform,
+            source_transform_used,
             width=roi_config.rectified_width,
             height=roi_config.rectified_height,
         )
         dsi_image = rectify_roi(
             frame,
             dsi_roi,
-            dsi_transform,
+            dsi_transform_used,
             width=roi_config.rectified_width,
             height=roi_config.rectified_height,
         )
@@ -186,6 +235,9 @@ def analyze_glass_latency(
         base = {
             "phone_frame_index": index,
             "phone_video_timestamp": timestamps[index],
+            "phone_capture_timestamp": capture_timestamps[index],
+            "source_transform_used": source_transform_used,
+            "dsi_transform_used": dsi_transform_used,
             "source": source.to_dict(),
             "dsi": dsi.to_dict(),
         }
@@ -224,6 +276,7 @@ def analyze_glass_latency(
             {
                 "phone_frame_index": index,
                 "phone_video_timestamp": timestamps[index],
+                "phone_capture_timestamp": capture_timestamps[index],
                 "source_frame_id": source.frame_id,
                 "displayed_frame_id": dsi.frame_id,
                 "source_unwrapped_frame_id": source_absolute,
@@ -291,9 +344,16 @@ def analyze_glass_latency(
         "queue_leaky": profile["leaky"],
         "sink_sync": profile["sync"],
         "phone_video_frames_analyzed": total,
+        "phone_capture_fps": effective_fps,
+        "encoded_timeline_fps": encoded_fps,
+        "slow_motion_timestamp_scale": timestamp_scale,
+        "estimated_real_capture_duration_seconds": (
+            capture_timestamps[index - 1] - capture_timestamps[0] if index > 1 else 0.0
+        ),
         "valid_samples": len(latency_records),
         "invalid_samples": len(invalid_records),
         "mixed_refresh_samples": len(mixed_records),
+        "decoder_minimum_bit_confidence": 0.10,
         "decode_success_rate": len(latency_records) / total if total else 0.0,
         "unique_dsi_frame_runs": len(runs),
         "phone_resample_repetitions": sum(max(0, run["length"] - 1) for run in runs),

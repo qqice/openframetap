@@ -31,9 +31,9 @@ def probe_video(path: Path, *, ffprobe_bin: str | None = None) -> tuple[dict, li
             "v:0",
             "-show_streams",
             "-show_format",
-            "-show_frames",
+            "-show_packets",
             "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,time_base,duration,nb_frames:format=duration:frame=best_effort_timestamp_time,pts_time,pkt_duration_time",
+            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,time_base,duration,nb_frames:format=duration:packet=pts_time,duration_time",
             "-of",
             "json",
             str(path),
@@ -41,7 +41,7 @@ def probe_video(path: Path, *, ffprobe_bin: str | None = None) -> tuple[dict, li
         text=True,
         capture_output=True,
         check=False,
-        timeout=120,
+        timeout=60,
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "ffprobe failed")
@@ -51,10 +51,12 @@ def probe_video(path: Path, *, ffprobe_bin: str | None = None) -> tuple[dict, li
         raise ValueError("phone video has no video stream")
     stream = streams[0]
     timestamps = []
-    for frame in payload.get("frames") or []:
+    timestamp_items = payload.get("packets") or payload.get("frames") or []
+    for frame in timestamp_items:
         raw = frame.get("best_effort_timestamp_time", frame.get("pts_time"))
         if raw not in (None, "N/A"):
             timestamps.append(float(raw))
+    timestamps.sort()
     if not timestamps:
         raise ValueError("phone video contains no usable frame timestamps")
     deltas = [right - left for left, right in zip(timestamps, timestamps[1:]) if right > left]
