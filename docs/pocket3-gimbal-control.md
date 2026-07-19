@@ -79,3 +79,54 @@ testing stops rather than trying another field arrangement.
 - Full live control cannot be enabled merely because mock tests pass. The four
   one-direction Pocket tests must first establish axis direction and stopping.
 
+## Pocket 3 one-shot result: 2026-07-19
+
+Evidence session: private capture `gimbal-test-20260719-220259` (not committed).
+All files named by its manifest passed SHA-256 verification after being pulled
+back from the ROCK 4D runtime.
+
+【实机事实】The owner observed no visible gimbal movement during the yaw-positive
+test. OpenFrameTap sent exactly one non-zero `04/0C` frame and two zero frames:
+
+| Relative action | Sequence | Payload | SHA-256 |
+| --- | ---: | --- | --- |
+| yaw-positive candidate | 0 | `000000000f0001` | `9512fd68a073189abc6dbd5fcdf5bee6037519ff9a887b1bd2c3e496c52a410b` |
+| release zero | 1 | `00000000000001` | `4621e5eee5b189ba453b0092de3645950b5b57e046093e9f7309006ffce8e439` |
+| redundant zero | 2 | `00000000000001` | `eedc9801d884d408c71737e1a6ce2438d269f13a60b9d864962b343fdc0e47e2` |
+
+The first zero write completed about 207.4 ms after the non-zero attempt; the
+redundant zero completed about 512.6 ms after it. ATT MTU was 517, every frame
+was one ATT write, FFF5 write count was three, FFF4 CCCD operation count was
+two, and there were no disconnect, CRC, or reassembly failures. The final
+control state was `disabled` and the final output was zero.
+
+【统计观察】The bounded session received 45 DUML frames, including 25 gimbal
+frames. No incoming `04/0C` response or ACK was observed. Eleven `04/05`
+samples covered roughly -562 to +436 ms around the non-zero write. The existing
+yaw candidate at payload offset 16 remained exactly `-3755`; offset 20 varied
+only from 6 to 7, offset 22 stayed zero, and the earlier raw fields at offsets
+0 and 8 were constant. This does not show a motion-correlated response.
+
+【捕获推断】The tested `pitch, roll, yaw, flag=0x01` form was accepted by the BLE
+transport but was probably ignored by Pocket firmware at the application layer.
+Lack of an ACK alone is not proof because the public Pocket implementation also
+reports no ACKs; the independent human observation and unchanged telemetry make
+“movement occurred but was merely too small to see” less likely.
+
+【参考实现结论】The public Pocket-specific implementation explicitly labels its
+gimbal controller WIP and reports that more than twenty BLE command variations
+were ignored. Public issue #2 independently reports the same symptom: telemetry
+works but control has no effect. The RS 3 capture proves `04/0C` on RS 3, not on
+Pocket 3, and its axis order and flag conflict with the Pocket-specific code.
+
+【已否定假设】`pocket3_speed_04_0c_v0` is not a hardware-validated Pocket 3
+control profile. This single bounded test does not prove that every `04/0C`
+variant is unsupported, but it does reject promoting the current payload to
+the live allowlist.
+
+Safety decision: do not increase output, do not try the opposite direction or
+pitch, and do not substitute the RS 3 field order/flag. Full touch live control
+remains fail-closed. The next useful evidence is an Android Bluetooth HCI snoop
+and, if BLE contains no joystick frames, a simultaneous owned-LAN packet capture
+while DJI Mimo visibly moves Pocket 3 from its preview screen. That capture must
+be analyzed before proposing another command.

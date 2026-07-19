@@ -186,6 +186,7 @@ Usage:
   ./scripts/remote.sh app-stop
   ./scripts/remote.sh mock-control-test
   ./scripts/remote.sh pocket3-gimbal-test <yaw|pitch> <positive|negative> 0.05 200
+  ./scripts/remote.sh pocket3-gimbal-pull <gimbal-test-stem>
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
@@ -301,11 +302,26 @@ cd $REMOTE_DIR
 cd $REMOTE_DIR
 OPENFRAMETAP_GIT_HEAD='$git_head' bash scripts/capture-pocket3.sh gimbal-test '$POCKET3_ADDRESS' 1 '$axis' '$direction' '$output' '$duration_ms'"
     status=$?
-    artifact_relative="$(extract_artifact_dir)"
+    artifact_relative="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
     if [[ "$artifact_relative" == private/gimbal-test-* ]]; then
       pull_dir "artifacts/$artifact_relative" "$ROOT_DIR/artifacts/private" || exit $?
     fi
     exit "$status"
+    ;;
+  pocket3-gimbal-pull)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    stem="$2"
+    [[ "$stem" =~ ^gimbal-test-[0-9]{8}-[0-9]{6}$ ]] || {
+      echo 'gimbal artifact stem is invalid' >&2
+      exit 2
+    }
+    run_remote gimbal-pull-check "set -eu
+cd $REMOTE_DIR
+test -f 'artifacts/private/$stem/summary.json'
+printf 'GIMBAL_ARTIFACT=%s\\n' 'private/$stem'"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
     ;;
   rtmp-install)
     binary="$MEDIAMTX_CACHE/mediamtx"
