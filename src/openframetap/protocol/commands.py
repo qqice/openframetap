@@ -111,6 +111,20 @@ class SendAuthorization:
             approved_frame_sha256=digest,
         )
 
+    @classmethod
+    def bounded_gimbal_test(cls, *, approval_reference: str) -> "SendAuthorization":
+        """Authorize only the reviewed speed command for one bounded tool run."""
+
+        if not approval_reference.strip():
+            raise ValueError("approval_reference cannot be empty")
+        return cls(
+            allowed_command_names=frozenset({"gimbal_speed_control"}),
+            purpose="bounded Pocket 3 one-shot 04/0C validation",
+            approval_reference=approval_reference,
+            approved_at=datetime.now(timezone.utc).isoformat(),
+            explicitly_approved_denied_commands=frozenset({"gimbal_speed_control"}),
+        )
+
 
 PAIRING_COMMANDS = {
     "set_pairing_pin": CommandDefinition(
@@ -319,3 +333,17 @@ def validate_command_frame(command: CommandDefinition, frame) -> None:
             or parsed.password
         ):
             raise CommandRejected("configure_live_stream RTMP URL violates LAN policy")
+    elif command.name == "gimbal_speed_control":
+        import struct
+
+        if frame.flags != 0x40 or len(frame.payload) != 7:
+            raise CommandRejected("gimbal_speed_control must be 40040C with a 7-byte payload")
+        pitch_units, roll_units, yaw_units, control_flag = struct.unpack(
+            "<hhhB", frame.payload
+        )
+        if roll_units != 0:
+            raise CommandRejected("gimbal roll control is prohibited in this phase")
+        if abs(pitch_units) > 45 or abs(yaw_units) > 45:
+            raise CommandRejected("gimbal speed exceeds the bounded 4.5 degree/s envelope")
+        if control_flag != 0x01:
+            raise CommandRejected("gimbal speed control flag is not the reviewed candidate")

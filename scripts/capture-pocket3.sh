@@ -17,7 +17,11 @@ combined_workflow_state_path="${6:-}"
 full_stream_proposal_path="${6:-}"
 full_start_proposal_path="${7:-}"
 full_workflow_state_path="${8:-}"
-[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] || {
+gimbal_axis="${4:-}"
+gimbal_direction="${5:-}"
+gimbal_output="${6:-}"
+gimbal_duration_ms="${7:-}"
+[[ "$operation" == "listen" || "$operation" == "telemetry" || "$operation" == "pair-status" || "$operation" == "manual-frame" || "$operation" == "manual-pair-session" || "$operation" == "experiment" || "$operation" == "gimbal-test" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] || {
   echo 'unsupported capture operation' >&2
   exit 2
 }
@@ -32,6 +36,7 @@ case "$operation" in
   manual-frame) prefix="pocket3-manual-frame" ;;
   manual-pair-session) prefix="pocket3-manual-pair-session" ;;
   experiment) prefix="pocket3-experiment" ;;
+  gimbal-test) prefix="gimbal-test" ;;
   rtmp-proposal) prefix="pocket3-rtmp-prepare" ;;
   rtmp-wifi-proposal) prefix="pocket3-rtmp-wifi" ;;
   rtmp-stream-proposal) prefix="pocket3-rtmp-stream" ;;
@@ -41,14 +46,14 @@ case "$operation" in
   rtmp-prepare-wifi-recovery) prefix="pocket3-rtmp-prepare-wifi-recovery" ;;
 esac
 stem="$prefix-$stamp"
-if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
+if [[ "$operation" == "gimbal-test" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]]; then
   artifact_relative="private/$stem"
 else
   artifact_relative="$stem"
 fi
 output_dir="artifacts/$artifact_relative"
 mkdir -p "$output_dir"
-[[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] && chmod 700 "$output_dir"
+[[ "$operation" == "gimbal-test" || "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" || "$operation" == "rtmp-full-stream-recovery" || "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" ]] && chmod 700 "$output_dir"
 snoop_path="$output_dir/capture.btsnoop"
 text_path="$output_dir/btmon.txt"
 session_output="$output_dir/session-output.txt"
@@ -102,11 +107,13 @@ stop_btmon() {
 }
 
 finalize_checksums() {
-  if [[ "$operation" != "experiment" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-stream-proposal" && "$operation" != "rtmp-stream-start-proposal" && "$operation" != "rtmp-full-stream-recovery" && "$operation" != "rtmp-prepare-recovery" && "$operation" != "rtmp-prepare-wifi-recovery" ]]; then
+  if [[ "$operation" != "experiment" && "$operation" != "gimbal-test" && "$operation" != "rtmp-proposal" && "$operation" != "rtmp-wifi-proposal" && "$operation" != "rtmp-stream-proposal" && "$operation" != "rtmp-stream-start-proposal" && "$operation" != "rtmp-full-stream-recovery" && "$operation" != "rtmp-prepare-recovery" && "$operation" != "rtmp-prepare-wifi-recovery" ]]; then
     return 0
   fi
   local names=(capture.btsnoop btmon.txt notifications.jsonl duml-frames.jsonl events.jsonl)
-  if [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" ]]; then
+  if [[ "$operation" == "gimbal-test" ]]; then
+    names=(capture.btsnoop btmon.txt config.json sent-commands.jsonl notifications.jsonl telemetry.jsonl state-transitions.jsonl transport-events.jsonl summary.json session-output.txt)
+  elif [[ "$operation" == "rtmp-proposal" || "$operation" == "rtmp-wifi-proposal" || "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" ]]; then
     names+=(summary.json transmission.json session-output.txt)
     [[ "$operation" == "rtmp-stream-proposal" || "$operation" == "rtmp-stream-start-proposal" ]] && names+=(server.log)
   elif [[ "$operation" == "rtmp-prepare-recovery" || "$operation" == "rtmp-prepare-wifi-recovery" || "$operation" == "rtmp-full-stream-recovery" ]]; then
@@ -210,6 +217,21 @@ case "$operation" in
     experiment_status=${PIPESTATUS[0]}
     trap cleanup INT TERM EXIT
     exit "$experiment_status"
+    ;;
+  gimbal-test)
+    [[ "$gimbal_axis" == "yaw" || "$gimbal_axis" == "pitch" ]] || {
+      echo 'gimbal-test axis must be yaw or pitch' >&2
+      exit 2
+    }
+    [[ "$gimbal_direction" == "positive" || "$gimbal_direction" == "negative" ]] || {
+      echo 'gimbal-test direction must be positive or negative' >&2
+      exit 2
+    }
+    OPENFRAMETAP_BOUNDED_GIMBAL_TEST=1 OPENFRAMETAP_GIT_HEAD="${OPENFRAMETAP_GIT_HEAD:-unknown}" \
+      "$PYTHON_BIN" -m openframetap pocket3 gimbal test \
+      --address "$address" --axis "$gimbal_axis" --direction "$gimbal_direction" \
+      --output "$gimbal_output" --duration-ms "$gimbal_duration_ms" \
+      --output-dir "$output_dir" 2>&1 | tee "$session_output"
     ;;
   rtmp-proposal|rtmp-wifi-proposal|rtmp-stream-proposal|rtmp-stream-start-proposal)
     [[ -t 0 || "${OPENFRAMETAP_TEST_MODE:-0}" == "1" || ( "$operation" == "rtmp-stream-start-proposal" && "${OPENFRAMETAP_AUTONOMOUS_REVERSIBLE:-0}" == "1" ) ]] || {

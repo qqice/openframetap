@@ -185,6 +185,7 @@ Usage:
   ./scripts/remote.sh app-status
   ./scripts/remote.sh app-stop
   ./scripts/remote.sh mock-control-test
+  ./scripts/remote.sh pocket3-gimbal-test <yaw|pitch> <positive|negative> 0.05 200
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
@@ -265,16 +266,46 @@ printf 'APP_OUTPUT=%s\\n' \"\$last\""
     ;;
   mock-control-test)
     deploy || exit $?
+    git_head="$(git -C "$ROOT_DIR" rev-parse HEAD)" || exit $?
     stamp="$(timestamp)"
     stem="mock-control-$stamp"
     run_remote mock-control-test "set -eu
 cd $REMOTE_DIR
-.venv/bin/python -m openframetap control mock-test --output 'artifacts/private/$stem'
+OPENFRAMETAP_GIT_HEAD='$git_head' .venv/bin/python -m openframetap control mock-test --output 'artifacts/private/$stem'
 printf 'MOCK_OUTPUT=%s\\n' 'artifacts/private/$stem'"
     status=$?
     [[ $status -eq 0 ]] || exit "$status"
     output_path="$(extract_stem 'MOCK_OUTPUT')"
     pull_dir "$output_path" "$ROOT_DIR/artifacts/private" || exit $?
+    ;;
+  pocket3-gimbal-test)
+    [[ $# -eq 5 ]] || { usage >&2; exit 2; }
+    axis="$2"
+    direction="$3"
+    output="$4"
+    duration_ms="$5"
+    [[ "$axis" == "yaw" || "$axis" == "pitch" ]] || { echo 'axis must be yaw or pitch' >&2; exit 2; }
+    [[ "$direction" == "positive" || "$direction" == "negative" ]] || { echo 'direction must be positive or negative' >&2; exit 2; }
+    [[ "$output" == "0.05" && "$duration_ms" == "200" ]] || {
+      echo 'first-stage wrapper is fixed to output 0.05 and duration 200 ms' >&2
+      exit 2
+    }
+    deploy || exit $?
+    git_head="$(git -C "$ROOT_DIR" rev-parse HEAD)" || exit $?
+    run_remote gimbal-preflight "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap app --status | grep -q '\"state\": \"stopped\"'"
+    status=$?
+    [[ $status -eq 0 ]] || { echo 'OpenFrameTap app must be stopped before one-shot control' >&2; exit "$status"; }
+    run_remote gimbal-test "set -eu
+cd $REMOTE_DIR
+OPENFRAMETAP_GIT_HEAD='$git_head' bash scripts/capture-pocket3.sh gimbal-test '$POCKET3_ADDRESS' 1 '$axis' '$direction' '$output' '$duration_ms'"
+    status=$?
+    artifact_relative="$(extract_artifact_dir)"
+    if [[ "$artifact_relative" == private/gimbal-test-* ]]; then
+      pull_dir "artifacts/$artifact_relative" "$ROOT_DIR/artifacts/private" || exit $?
+    fi
+    exit "$status"
     ;;
   rtmp-install)
     binary="$MEDIAMTX_CACHE/mediamtx"

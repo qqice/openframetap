@@ -317,6 +317,24 @@ def build_parser() -> argparse.ArgumentParser:
             "POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address
         ),
     )
+    gimbal = pocket3_commands.add_parser(
+        "gimbal", help="bounded active gimbal validation tools"
+    )
+    gimbal_commands = gimbal.add_subparsers(dest="gimbal_command", required=True)
+    gimbal_test = gimbal_commands.add_parser(
+        "test", help="send exactly one low-rate axis command followed by redundant zero"
+    )
+    gimbal_test.add_argument("--axis", choices=("yaw", "pitch"), required=True)
+    gimbal_test.add_argument(
+        "--direction", choices=("positive", "negative"), required=True
+    )
+    gimbal_test.add_argument("--output", type=float, required=True)
+    gimbal_test.add_argument("--duration-ms", type=int, required=True)
+    gimbal_test.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    gimbal_test.add_argument("--output-dir", type=Path, required=True)
     rtmp = pocket3_commands.add_parser("rtmp", help="human-gated Pocket 3 RTMP workflow")
     rtmp_commands = rtmp.add_subparsers(dest="rtmp_command", required=True)
     rtmp_commands.add_parser("plan", help="show the fail-closed persistent workflow")
@@ -473,13 +491,15 @@ def main(argv: list[str] | None = None) -> int:
         from openframetap.control.mock_validation import run_mock_validation
 
         try:
-            head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=5,
-            ).stdout.strip() or "unknown"
+            head = os.environ.get("OPENFRAMETAP_GIT_HEAD", "").strip()
+            if not head:
+                head = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                ).stdout.strip() or "unknown"
             payload = run_mock_validation(args.output, software_git_head=head)
         except (OSError, RuntimeError, ValueError) as exc:
             print(f"MOCK_CONTROL_FAILED: {exc}")
@@ -958,6 +978,29 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
+    if args.command == "pocket3" and args.pocket3_command == "gimbal":
+        if os.environ.get("OPENFRAMETAP_BOUNDED_GIMBAL_TEST") != "1":
+            print("GIMBAL_TEST_REFUSED: use the fixed remote one-shot wrapper")
+            return 4
+        from openframetap.control.one_shot import run_one_shot_gimbal_test
+
+        try:
+            payload = asyncio.run(
+                run_one_shot_gimbal_test(
+                    address=args.address,
+                    axis=args.axis,
+                    direction=args.direction,
+                    output_value=args.output,
+                    duration_ms=args.duration_ms,
+                    output_dir=args.output_dir,
+                    software_git_head=os.environ.get("OPENFRAMETAP_GIT_HEAD", "unknown"),
+                )
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"GIMBAL_TEST_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2))
+        return 0 if payload.get("error") is None else 1
     if args.command == "pocket3" and args.pocket3_command == "pair":
         if args.pair_command == "status":
             output_dir = args.output_dir or Path("artifacts") / f"pocket3-pair-status-{_stamp()}"

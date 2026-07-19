@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from openframetap.protocol.duml import decode_duml_frame
+from openframetap.protocol.duml import decode_duml_frame, encode_duml_frame
+from openframetap.protocol.commands import (
+    CommandRejected,
+    DANGEROUS_COMMANDS,
+    SendAuthorization,
+    assert_send_allowed,
+    validate_command_frame,
+)
 from openframetap.protocol.gimbal_commands import (
     POCKET3_SPEED_PROFILE,
     build_speed_frame,
@@ -43,3 +50,29 @@ def test_profile_is_not_prematurely_hardware_validated() -> None:
     assert POCKET3_SPEED_PROFILE.pocket3_hardware_validated is False
     assert POCKET3_SPEED_PROFILE.axis_order == "pitch_roll_yaw"
 
+
+def test_bounded_authorization_is_only_for_speed_control() -> None:
+    authorization = SendAuthorization.bounded_gimbal_test(approval_reference="fixture")
+    speed = DANGEROUS_COMMANDS["gimbal_speed_control"]
+    assert_send_allowed(speed, authorization)
+    with pytest.raises(CommandRejected):
+        assert_send_allowed(DANGEROUS_COMMANDS["gimbal_pwm_control"], authorization)
+
+
+def test_transport_policy_revalidates_bounded_speed_payload() -> None:
+    command = DANGEROUS_COMMANDS["gimbal_speed_control"]
+    valid = decode_duml_frame(build_speed_frame(sequence=1, yaw=0.15, pitch=0.0, live=True))
+    validate_command_frame(command, valid)
+    invalid_flag = decode_duml_frame(
+        encode_duml_frame(
+            sender=2,
+            receiver=4,
+            sequence=1,
+            flags=0x40,
+            cmd_set=4,
+            cmd_id=0x0C,
+            payload=bytes.fromhex("00000000000080"),
+        )
+    )
+    with pytest.raises(CommandRejected, match="flag"):
+        validate_command_frame(command, invalid_flag)
