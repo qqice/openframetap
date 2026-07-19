@@ -16,6 +16,7 @@ from openframetap.protocol.dji_wifi import DjiWifiEnvelope, DjiWifiEnvelopeError
 
 
 DLT_RAW = 101
+DLT_LINUX_SLL2 = 276
 _PCAP_MAGICS = {
     b"\xd4\xc3\xb2\xa1": ("<", 1_000_000),
     b"\xa1\xb2\xc3\xd4": (">", 1_000_000),
@@ -60,7 +61,7 @@ def _read_udp(path: Path) -> tuple[list[UdpDatagram], dict]:
         _magic, major, minor, _zone, _sigfigs, _snaplen, link_type = struct.unpack(
             endian + "IHHIIII", header
         )
-        if (major, minor) != (2, 4) or link_type != DLT_RAW:
+        if (major, minor) != (2, 4) or link_type not in {DLT_RAW, DLT_LINUX_SLL2}:
             raise ValueError(f"unsupported PCAP version/link type: {major}.{minor}/{link_type}")
         while record_header := stream.read(16):
             if len(record_header) != 16:
@@ -78,6 +79,10 @@ def _read_udp(path: Path) -> tuple[list[UdpDatagram], dict]:
             last = timestamp if last is None else max(last, timestamp)
             index = packet_count
             packet_count += 1
+            if link_type == DLT_LINUX_SLL2:
+                if len(packet) < 20 or packet[0:2] != b"\x08\x00":
+                    continue
+                packet = packet[20:]
             if len(packet) < 28 or packet[0] >> 4 != 4:
                 continue
             ihl = (packet[0] & 0x0F) * 4

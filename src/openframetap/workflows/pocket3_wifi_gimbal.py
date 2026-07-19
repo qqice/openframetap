@@ -60,6 +60,7 @@ async def run_wifi_gimbal_test(
     output = require_private_directory(output_dir)
     sent_datagrams = JsonlWriter(output / "sent-datagrams.jsonl")
     sent_duml = JsonlWriter(output / "sent-duml.jsonl")
+    udp_received = JsonlWriter(output / "udp-received.jsonl")
     notifications = JsonlWriter(output / "notifications.jsonl")
     telemetry = JsonlWriter(output / "telemetry.jsonl")
     transitions = JsonlWriter(output / "state-transitions.jsonl")
@@ -107,6 +108,7 @@ async def run_wifi_gimbal_test(
     (output / "config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
     notification_count = 0
+    udp_datagram_count = 0
     duml_count = 0
     gimbal_count = 0
     crc_failures = 0
@@ -114,6 +116,7 @@ async def run_wifi_gimbal_test(
     telemetry_first: dict[str, int] | None = None
     telemetry_last: dict[str, int] | None = None
     error: str | None = None
+    udp_telemetry_ready = asyncio.Event()
 
     def udp_event(event: dict) -> None:
         sent_datagrams.write(event)
@@ -127,39 +130,71 @@ async def run_wifi_gimbal_test(
                 }
             )
 
-    async def on_notification(record) -> None:
+    def record_frame(frame, *, wall_time: str, monotonic_ns: int, transport: str) -> None:
         nonlocal notification_count, duml_count, gimbal_count, crc_failures
         nonlocal reassembly_errors, telemetry_first, telemetry_last
+        nonlocal udp_datagram_count
+        duml_count += 1
+        if not frame.crc8_valid or not frame.crc16_valid:
+            crc_failures += 1
+        if frame.cmd_set != 0x04:
+            return
+        if transport == "wifi_udp_9004":
+            udp_telemetry_ready.set()
+        gimbal_count += 1
+        item = {
+            "wall_time_utc": wall_time,
+            "monotonic_ns": monotonic_ns,
+            "transport": transport,
+            **frame.to_dict(),
+        }
+        if frame.cmd_id == 0x05 and len(frame.payload) >= 24:
+            import struct
+
+            candidates = {
+                "yaw_offset16": struct.unpack_from("<h", frame.payload, 16)[0],
+                "pitch_offset20": struct.unpack_from("<h", frame.payload, 20)[0],
+                "roll_offset22": struct.unpack_from("<h", frame.payload, 22)[0],
+            }
+            item["candidates"] = candidates
+            telemetry_first = telemetry_first or candidates
+            telemetry_last = candidates
+        telemetry.write(item)
+
+    async def on_notification(record) -> None:
+        nonlocal notification_count, reassembly_errors
         notification_count += 1
         notifications.write(record.to_dict())
         for event in reassembler.feed(record.data):
             if event.kind != "frame" or event.frame is None:
                 reassembly_errors += 1
                 continue
-            frame = event.frame
-            duml_count += 1
-            if not frame.crc8_valid or not frame.crc16_valid:
-                crc_failures += 1
-            if frame.cmd_set != 0x04:
-                continue
-            gimbal_count += 1
-            item = {
-                "wall_time_utc": record.wall_timestamp,
-                "monotonic_ns": record.monotonic_ns,
-                **frame.to_dict(),
-            }
-            if frame.cmd_id == 0x05 and len(frame.payload) >= 24:
-                import struct
+            record_frame(
+                event.frame,
+                wall_time=record.wall_timestamp,
+                monotonic_ns=record.monotonic_ns,
+                transport="ble_fff4",
+            )
 
-                candidates = {
-                    "yaw_offset16": struct.unpack_from("<h", frame.payload, 16)[0],
-                    "pitch_offset20": struct.unpack_from("<h", frame.payload, 20)[0],
-                    "roll_offset22": struct.unpack_from("<h", frame.payload, 22)[0],
-                }
-                item["candidates"] = candidates
-                telemetry_first = telemetry_first or candidates
-                telemetry_last = candidates
-            telemetry.write(item)
+    async def receive_udp_telemetry() -> None:
+        nonlocal udp_datagram_count, reassembly_errors
+        while udp.is_open:
+            record = await udp.receive_datagram()
+            udp_datagram_count += 1
+            udp_received.write(record.to_dict())
+            datagram_reassembler = DumlStreamReassembler()
+            events = datagram_reassembler.feed(record.data) + datagram_reassembler.finish()
+            for event in events:
+                if event.kind != "frame" or event.frame is None:
+                    # Envelope bytes before the DUML magic are expected resync
+                    # input, not a persistent stream failure.
+                    continue
+                record_frame(
+                    event.frame,
+                    wall_time=record.wall_time_utc,
+                    monotonic_ns=record.monotonic_ns,
+                    transport="wifi_udp_9004",
+                )
 
     ble = ble_transport_factory(address, POCKET3_PROFILE)
     udp = transport_factory(
@@ -173,6 +208,7 @@ async def run_wifi_gimbal_test(
         sleep=sleep,
         on_transition=transitions.write,
     )
+    udp_receiver_task: asyncio.Task | None = None
     try:
         await ble.connect()
         await ble.acquire_mtu()
@@ -181,6 +217,15 @@ async def run_wifi_gimbal_test(
         if notification_count == 0:
             raise RuntimeError("FFF4 telemetry subscription produced no notification evidence")
         await udp.open()
+        udp_receiver_task = asyncio.create_task(
+            receive_udp_telemetry(), name="pocket3-wifi-telemetry-receiver"
+        )
+        try:
+            await asyncio.wait_for(udp_telemetry_ready.wait(), timeout=1.0)
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Pocket transport handshake completed but no UDP gimbal telemetry arrived"
+            ) from exc
         await controller.start_watchdog()
         prerequisites = WifiControlPrerequisites(
             pocket_ip_confirmed=True,
@@ -219,12 +264,29 @@ async def run_wifi_gimbal_test(
                 error += f"; center failure: {type(stop_exc).__name__}: {stop_exc}"
     finally:
         await controller.stop_watchdog()
+        if udp_receiver_task is not None:
+            udp_receiver_task.cancel()
+            try:
+                await udp_receiver_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as receive_exc:
+                error = error or (
+                    f"UDP telemetry receiver failed: {type(receive_exc).__name__}: {receive_exc}"
+                )
         await udp.close()
         await ble.disconnect()
         for event in reassembler.finish():
             if event.kind != "frame":
                 reassembly_errors += 1
-        for writer in (sent_datagrams, sent_duml, notifications, telemetry, transitions):
+        for writer in (
+            sent_datagrams,
+            sent_duml,
+            udp_received,
+            notifications,
+            telemetry,
+            transitions,
+        ):
             writer.close()
 
     telemetry_delta = None
@@ -252,6 +314,8 @@ async def run_wifi_gimbal_test(
         "visible_motion_observation": "pending_owner_observation",
         "motion_stopped": None,
         "notifications_received": notification_count,
+        "udp_datagrams_received": udp_datagram_count,
+        "udp_gimbal_telemetry_online_before_control": udp_telemetry_ready.is_set(),
         "duml_frames_received": duml_count,
         "gimbal_frames_received": gimbal_count,
         "crc_failures": crc_failures,

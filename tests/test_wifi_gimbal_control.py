@@ -253,6 +253,7 @@ def test_center_workflow_serializes_summary_and_never_writes_fff5(
             self.event_handler = event_handler
             self.is_open = False
             self.sequence = 0
+            self.receive_count = 0
 
         async def open(self) -> None: self.is_open = True
 
@@ -270,6 +271,21 @@ def test_center_workflow_serializes_summary_and_never_writes_fff5(
             return event
 
         async def close(self) -> None: self.is_open = False
+
+        async def receive_datagram(self):
+            if self.receive_count == 0:
+                self.receive_count += 1
+                raw = encode_duml_frame(
+                    sender=4, receiver=2, sequence=2, flags=0,
+                    cmd_set=4, cmd_id=5, payload=b"\0" * 24,
+                )
+                return SimpleNamespace(
+                    data=raw,
+                    wall_time_utc="2026-01-01T00:00:01+00:00",
+                    monotonic_ns=2,
+                    to_dict=lambda: {"data_hex": raw.hex(), "monotonic_ns": 2},
+                )
+            await asyncio.Event().wait()
 
     async def instant_sleep(_seconds: float) -> None: pass
 
@@ -297,5 +313,6 @@ def test_center_workflow_serializes_summary_and_never_writes_fff5(
     assert summary["non_center_packets"] == 0
     assert summary["fff5_write_count"] == 0
     assert summary["04_50_send_count"] == 0
+    assert summary["udp_gimbal_telemetry_online_before_control"] is True
     assert (output / "summary.json").is_file()
     assert (output / "sent-datagrams.jsonl").read_text().count("stick_center") == 8

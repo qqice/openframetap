@@ -78,7 +78,7 @@ finalize() {
   rm -f "$btmon_pid_file" "$tcpdump_pid_file"
   : >"$output_dir/checksums.sha256"
   local name
-  for name in config.json udp-capture.pcap tcpdump.txt capture.btsnoop btmon.txt sent-datagrams.jsonl sent-duml.jsonl notifications.jsonl telemetry.jsonl state-transitions.jsonl media-status.json summary.json session-output.txt; do
+  for name in config.json udp-capture.pcap tcpdump.txt capture.btsnoop btmon.txt sent-datagrams.jsonl sent-duml.jsonl udp-received.jsonl notifications.jsonl telemetry.jsonl state-transitions.jsonl media-status.json summary.json session-output.txt; do
     [[ -f "$output_dir/$name" ]] && (cd "$output_dir" && sha256sum "$name") >>"$output_dir/checksums.sha256"
   done
   printf 'ARTIFACT_DIR=private/%s\n' "$stem"

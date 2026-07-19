@@ -254,3 +254,41 @@ Current limits remain: two non-center frames at 10 Hz, offset exactly 16,
 300 ms wait, one final center and a two-second observation interval. Any
 unexpected direction, continued motion, Pocket error, BLE/RTMP loss or manual
 recovery requirement stops active testing.
+
+## Structured Wi-Fi yaw-positive pulse: 2026-07-20
+
+Private evidence session: `wifi-gimbal-test-20260720-011304`. All files in the
+original manifest passed SHA-256 verification; the UDP PCAP SHA-256 is
+`3cc192b1ae46bf75a23eeb254da5e16602b5e2d96fbfa30fd71fd66d5f8ece64`.
+
+【实机事实】The controller sent the required three start centers, two yaw=1040
+commands 101.495 ms apart, five immediate centers and one final center. Pitch
+remained 1024, roll remained zero, and both fixed fields retained their
+capture-verified values. The session sent no `04/50` and made no FFF5 write;
+there were no CRC, reassembly, socket, BLE-disconnect or RTMP-disconnect errors,
+and the final state was `centered`.
+
+【实机事实】The owner saw no visible movement. This is not treated as proof that
+the command was ignored, and the offset is not increased to manufacture a
+visible result.
+
+【统计观察】Offline parsing of the real UDP downlink recovered 52 `04/05`
+messages. Yaw offset 16 was exactly 17048 before the pulse, changed to 17049
+about 199 ms after the first non-center datagram, and stayed there through the
+two-second observation window. Pitch offset 20 remained 94, roll offset 22
+remained 8, and `04/27` remained unchanged. The axis selectivity and positive
+sign are consistent with a very small yaw-positive response, but a one-unit
+change from a single trial has only low-to-medium confidence.
+
+【已否定假设】The original live summary's zero telemetry delta is not valid
+evidence that Pocket ignored the pulse. FFF4's last `04/05` arrived about
+697 ms before the first non-center datagram: after the DJI Wi-Fi handshake,
+the active telemetry continued inside UDP 9004 instead of BLE notifications.
+The recorder has therefore been changed to drain, preserve and decode UDP
+downlink telemetry, and the next control session refuses to arm until a valid
+UDP gimbal message has arrived.
+
+Safety decision: retain offset 16 and run the reciprocal yaw-negative pulse.
+An opposite one-unit-or-larger yaw-only change would materially strengthen the
+interpretation. No amplitude increase, yaw repeat, pitch test, `04/50`, or
+alternate fixed field is allowed before that result is analyzed.

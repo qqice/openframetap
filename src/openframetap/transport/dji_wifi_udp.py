@@ -128,6 +128,25 @@ class DjiWifiHandshakeProfile:
         return basic + payload
 
 
+@dataclass(frozen=True, slots=True)
+class UdpReceiveRecord:
+    wall_time_utc: str
+    monotonic_ns: int
+    peer_ip: str
+    peer_port: int
+    data: bytes
+
+    def to_dict(self) -> dict:
+        return {
+            "wall_time_utc": self.wall_time_utc,
+            "monotonic_ns": self.monotonic_ns,
+            "peer_ip": self.peer_ip,
+            "peer_port": self.peer_port,
+            "length": len(self.data),
+            "data_hex": self.data.hex(),
+        }
+
+
 class DjiWifiUdpTransport:
     """Own one bound socket and expose only structured 04/01 sends."""
 
@@ -264,6 +283,27 @@ class DjiWifiUdpTransport:
                 return record
             finally:
                 self._owner_task = None
+
+    async def receive_datagram(self, *, maximum_size: int = 65535) -> UdpReceiveRecord:
+        """Receive only from the already validated Pocket peer.
+
+        UDP delivery remains unacknowledged; this method exists to preserve
+        the downlink telemetry that moves from FFF4 to the Wi-Fi session after
+        the transport handshake.
+        """
+
+        if self.socket is None:
+            raise RuntimeError("UDP control transport is not open")
+        data, peer = await self._recvfrom(maximum_size)
+        if peer != (self.target_ip, self.target_port):
+            raise RuntimeError("received a control-session datagram from an unexpected peer")
+        return UdpReceiveRecord(
+            wall_time_utc=_utc_now(),
+            monotonic_ns=time.monotonic_ns(),
+            peer_ip=peer[0],
+            peer_port=peer[1],
+            data=bytes(data),
+        )
 
     async def close(self) -> None:
         if self.socket is not None:
