@@ -50,10 +50,23 @@ def test_remote_wrapper_exposes_owned_app_lifecycle_only() -> None:
         "app-stop",
         "pocket3-gimbal-test",
         "pocket3-gimbal-pull",
+        "gimbal-center-test",
+        "gimbal-pulse",
     ):
         assert action in text
     assert "pkill python" not in text
     assert "killall" not in text
+
+
+def test_wifi_gimbal_capture_has_bounded_filter_and_cleanup() -> None:
+    text = (ROOT / "scripts/capture-wifi-gimbal.sh").read_text(encoding="utf-8")
+    assert '"udp and host $4 and port 9004"' in text
+    assert "trap finalize INT TERM EXIT" in text
+    assert 'stop_capture_pid "$tcpdump_pid"' in text
+    assert 'stop_capture_pid "$btmon_pid"' in text
+    assert "--offset 16 --frames 2 --rate-hz 10" in text
+    assert "04/50" not in text
+    assert "trap '' HUP" in text
 
 
 def test_ssh_failure_status_propagates() -> None:

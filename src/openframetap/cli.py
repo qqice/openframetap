@@ -353,6 +353,37 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
     )
     gimbal_test.add_argument("--output-dir", type=Path, required=True)
+    wifi_gimbal = pocket3_commands.add_parser(
+        "wifi-gimbal", help="capture-verified UDP 04/01 center and pulse tools"
+    )
+    wifi_gimbal_commands = wifi_gimbal.add_subparsers(
+        dest="wifi_gimbal_command", required=True
+    )
+    wifi_center = wifi_gimbal_commands.add_parser(
+        "center-test", help="send only redundant capture-verified center frames"
+    )
+    wifi_center.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    wifi_center.add_argument("--local-port", type=int, default=54232)
+    wifi_center.add_argument("--output-dir", type=Path, required=True)
+    wifi_center.add_argument("--mimo-closed", action="store_true")
+    wifi_pulse = wifi_gimbal_commands.add_parser(
+        "pulse", help="send one fixed two-frame offset-16 pulse then redundant center"
+    )
+    wifi_pulse.add_argument("--axis", choices=("yaw", "pitch"), required=True)
+    wifi_pulse.add_argument("--direction", choices=("positive", "negative"), required=True)
+    wifi_pulse.add_argument("--offset", type=int, default=16)
+    wifi_pulse.add_argument("--frames", type=int, default=2)
+    wifi_pulse.add_argument("--rate-hz", type=float, default=10.0)
+    wifi_pulse.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    wifi_pulse.add_argument("--local-port", type=int, default=54232)
+    wifi_pulse.add_argument("--output-dir", type=Path, required=True)
+    wifi_pulse.add_argument("--mimo-closed", action="store_true")
     rtmp = pocket3_commands.add_parser("rtmp", help="human-gated Pocket 3 RTMP workflow")
     rtmp_commands = rtmp.add_subparsers(dest="rtmp_command", required=True)
     rtmp_commands.add_parser("plan", help="show the fail-closed persistent workflow")
@@ -1077,6 +1108,33 @@ def main(argv: list[str] | None = None) -> int:
             print(f"GIMBAL_TEST_FAILED: {exc}")
             return 1
         print(json.dumps(payload, indent=2))
+        return 0 if payload.get("error") is None else 1
+    if args.command == "pocket3" and args.pocket3_command == "wifi-gimbal":
+        if os.environ.get("OPENFRAMETAP_WIFI_GIMBAL_TEST") != "1":
+            print("WIFI_GIMBAL_TEST_REFUSED: use the fixed remote wrapper")
+            return 4
+        from openframetap.workflows.pocket3_wifi_gimbal import run_wifi_gimbal_test
+
+        try:
+            payload = asyncio.run(
+                run_wifi_gimbal_test(
+                    mode=args.wifi_gimbal_command,
+                    address=args.address,
+                    output_dir=args.output_dir,
+                    software_git_head=os.environ.get("OPENFRAMETAP_GIT_HEAD", "unknown"),
+                    mimo_closed=args.mimo_closed,
+                    axis=getattr(args, "axis", None),
+                    direction=getattr(args, "direction", None),
+                    offset=getattr(args, "offset", 16),
+                    frames=getattr(args, "frames", 2),
+                    rate_hz=getattr(args, "rate_hz", 10.0),
+                    local_port=args.local_port,
+                )
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"WIFI_GIMBAL_TEST_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0 if payload.get("error") is None else 1
     if args.command == "pocket3" and args.pocket3_command == "pair":
         if args.pair_command == "status":

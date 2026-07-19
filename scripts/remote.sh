@@ -187,6 +187,8 @@ Usage:
   ./scripts/remote.sh mock-control-test
   ./scripts/remote.sh pocket3-gimbal-test <yaw|pitch> <positive|negative> 0.05 200
   ./scripts/remote.sh pocket3-gimbal-pull <gimbal-test-stem>
+  ./scripts/remote.sh gimbal-center-test
+  ./scripts/remote.sh gimbal-pulse <yaw|pitch> <positive|negative>
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
@@ -304,6 +306,46 @@ OPENFRAMETAP_GIT_HEAD='$git_head' bash scripts/capture-pocket3.sh gimbal-test '$
     status=$?
     artifact_relative="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
     if [[ "$artifact_relative" == private/gimbal-test-* ]]; then
+      pull_dir "artifacts/$artifact_relative" "$ROOT_DIR/artifacts/private" || exit $?
+    fi
+    exit "$status"
+    ;;
+  gimbal-center-test|gimbal-pulse)
+    if [[ "$action" == "gimbal-center-test" ]]; then
+      [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+      wifi_mode="center-test"
+      axis=""
+      direction=""
+    else
+      [[ $# -eq 3 ]] || { usage >&2; exit 2; }
+      wifi_mode="pulse"
+      axis="$2"
+      direction="$3"
+      [[ "$axis" == "yaw" || "$axis" == "pitch" ]] || { echo 'axis must be yaw or pitch' >&2; exit 2; }
+      [[ "$direction" == "positive" || "$direction" == "negative" ]] || { echo 'direction must be positive or negative' >&2; exit 2; }
+    fi
+    run_remote wifi-gimbal-publisher-check "if ss -Htn state established sport = :1935 | grep -q .; then echo PUBLISHER_PRESENT=1; else echo PUBLISHER_PRESENT=0; fi"
+    publisher_present="$(extract_stem PUBLISHER_PRESENT | tr -d '\r')"
+    if [[ "$publisher_present" != "1" ]]; then
+      printf '%s\n' '[openframetap] Current Pocket RTMP publisher is absent; restoring the existing verified stream session first.'
+      "$0" pocket3-rtmp-run-full-stream-session || exit $?
+    fi
+    deploy || exit $?
+    git_head="$(git -C "$ROOT_DIR" rev-parse HEAD)" || exit $?
+    run_remote wifi-gimbal-preflight "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap app --status | grep -q '\"state\": \"stopped\"'
+command -v tcpdump >/dev/null
+command -v btmon >/dev/null
+sudo -n true"
+    status=$?
+    [[ $status -eq 0 ]] || { echo 'Wi-Fi gimbal preflight failed; no control datagram was sent.' >&2; exit "$status"; }
+    run_remote wifi-gimbal-test "set -eu
+cd $REMOTE_DIR
+OPENFRAMETAP_GIT_HEAD='$git_head' bash scripts/capture-wifi-gimbal.sh '$wifi_mode' '$POCKET3_ADDRESS' '$axis' '$direction'"
+    status=$?
+    artifact_relative="$(extract_stem ARTIFACT_DIR | tr -d '\r')"
+    if [[ "$artifact_relative" == private/wifi-gimbal-test-* ]]; then
       pull_dir "artifacts/$artifact_relative" "$ROOT_DIR/artifacts/private" || exit $?
     fi
     exit "$status"
