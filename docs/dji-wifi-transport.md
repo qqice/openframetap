@@ -58,6 +58,24 @@ They must be established by a structured, capture-derived handshake profile
 and recorded in each private test artifact. OpenFrameTap does not copy an
 opaque 20-byte header or accept a raw datagram from a caller.
 
+The DUML transaction field remains represented as a big-endian value by the
+general DUML codec. Mimo's Wi-Fi sender, however, advances an underlying
+little-endian uint16 counter before placing its two bytes into that field. The
+captured consecutive bytes are therefore `42 b7`, `43 b7`, `44 b7`, not
+`42 b7`, `42 b8`, `42 b9`. The Wi-Fi transport performs this counter-to-wire
+mapping explicitly; BLE and offline DUML semantics are unchanged.
+Across all 2,570 upstream DUML frames in the immutable Mimo PCAP, interpreting
+bytes 6–7 as the underlying little-endian counter yields `+1` for 2,230 of
+2,569 adjacent transitions; the remaining gaps are explained by unobserved or
+interleaved traffic. The first twelve captured upstream frames are all `+1`.
+
+An early live prototype incremented the codec value directly, producing wire
+bytes `00 00`, `00 01`, `00 02`. Pocket accepted the first control burst and
+then stopped responding to both `04/01` and `04/50`. ACK synchronization,
+fresh session IDs, keepalive tolerance, and experimental WhType `04` traffic
+did not change that boundary. The WhType `04` experiment generated excessive
+traffic without advancing the Pocket ACK window and has been removed.
+
 ## Command boundary
 
 The only outbound DUML command allowed by the current Wi-Fi control profile is

@@ -34,6 +34,7 @@ from openframetap.transport.dji_wifi_udp import (
     list_rtmp_server_peer_ips,
     parse_rtmp_publisher_ips,
     validate_pocket_target_ip,
+    wifi_duml_wire_sequence,
 )
 from openframetap.workflows import pocket3_wifi_gimbal as workflow
 
@@ -70,6 +71,13 @@ def test_control_keepalive_matches_mimo_capture_exactly() -> None:
     assert request.hex() == "5510045602046bb6400450010405a3da"
     response = bytes.fromhex("551504a904026bb680045000010401000501018ecc")
     assert decode_control_keepalive_response(response) == 0x6BB6
+
+
+def test_wifi_duml_counter_advances_like_consecutive_mimo_frames() -> None:
+    assert wifi_duml_wire_sequence(0xB742) == 0x42B7
+    assert wifi_duml_wire_sequence(0xB743) == 0x43B7
+    assert wifi_duml_wire_sequence(0xFFFF) == 0xFFFF
+    assert wifi_duml_wire_sequence(0x0000) == 0x0000
 
 
 def test_fixed_fields_roll_ranges_and_axes_fail_closed() -> None:
@@ -259,39 +267,25 @@ def test_transport_matches_control_keepalive_response_by_duml_sequence() -> None
     asyncio.run(scenario())
 
 
-def test_transport_flow_ack_matches_mimo_capture_and_tracks_latest_send() -> None:
+def test_transport_emits_mimo_ordered_consecutive_duml_sequences() -> None:
     async def scenario() -> None:
         transport = DjiWifiUdpTransport(
             "192.168.2.1", handshake_profile=DjiWifiHandshakeProfile()
         )
         transport.socket = object()
         transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82B0, 0x82A8)
-        transport.last_sent_transport_sequence = 0x82B0
-        incoming = bytes.fromhex(
-            "6b805570000001cfa882a88200000000a882a88200000000"
-            "b082b082000000004900"
-            "554904930102402f000280010280000151e7000068de0000"
-            "000000004f0f000000000000000000000000000246000001"
-            "00000000000000000000000000000000000000000100001d05"
-        )
+        transport.duml_sequence = 0xB742
         sent = []
-
-        async def recvfrom(_size):
-            return incoming, ("192.168.2.1", 9004)
 
         async def sendto(data):
             sent.append(data)
 
-        transport._recvfrom = recvfrom
         transport._sendto = sendto
-        await transport.receive_datagram()
-        assert sent == [
-            bytes.fromhex(
-                "2280557000000483a882a88200000000a882a88200000000"
-                "b082b082000000000000"
-            )
-        ]
-        assert transport.flow_ack_sent_count == 1
+        first = await transport.send_stick(CENTER_STICK_COMMAND, reason="first")
+        second = await transport.send_stick(CENTER_STICK_COMMAND, reason="second")
+        assert (first["duml_sequence"], second["duml_sequence"]) == (0x42B7, 0x43B7)
+        assert DjiWifiEnvelope.parse(sent[0]).payload[6:8] == bytes.fromhex("42b7")
+        assert DjiWifiEnvelope.parse(sent[1]).payload[6:8] == bytes.fromhex("43b7")
 
     asyncio.run(scenario())
 
