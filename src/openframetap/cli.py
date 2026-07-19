@@ -160,6 +160,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--control-mode", choices=("disabled", "mock", "live"), default="disabled"
     )
 
+    control = subcommands.add_parser("control", help="offline control safety tools")
+    control_commands = control.add_subparsers(dest="control_command", required=True)
+    mock_test = control_commands.add_parser(
+        "mock-test", help="run the deterministic fail-closed scenario matrix"
+    )
+    mock_test.add_argument("--output", type=Path, required=True)
+
     video = subcommands.add_parser("video", help="user-space RTMP ingest tools")
     video_commands = video.add_subparsers(dest="video_command", required=True)
     video_doctor = video_commands.add_parser(
@@ -462,6 +469,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "control" and args.control_command == "mock-test":
+        from openframetap.control.mock_validation import run_mock_validation
+
+        try:
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            ).stdout.strip() or "unknown"
+            payload = run_mock_validation(args.output, software_git_head=head)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"MOCK_CONTROL_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2))
+        return 0 if payload["all_final_output_zero"] and payload["fff5_write_count"] == 0 else 1
     if args.command == "app":
         from openframetap.video.player_process import ProcessRegistry
 

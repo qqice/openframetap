@@ -184,6 +184,7 @@ Usage:
   ./scripts/remote.sh app-start-mock [seconds]
   ./scripts/remote.sh app-status
   ./scripts/remote.sh app-stop
+  ./scripts/remote.sh mock-control-test
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
@@ -261,6 +262,19 @@ printf 'APP_OUTPUT=%s\\n' \"\$last\""
       pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
       pull_dir "artifacts/sanitized/$stem" "$ROOT_DIR/artifacts/sanitized" || exit $?
     fi
+    ;;
+  mock-control-test)
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="mock-control-$stamp"
+    run_remote mock-control-test "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap control mock-test --output 'artifacts/private/$stem'
+printf 'MOCK_OUTPUT=%s\\n' 'artifacts/private/$stem'"
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    output_path="$(extract_stem 'MOCK_OUTPUT')"
+    pull_dir "$output_path" "$ROOT_DIR/artifacts/private" || exit $?
     ;;
   rtmp-install)
     binary="$MEDIAMTX_CACHE/mediamtx"
