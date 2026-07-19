@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 import ipaddress
 import re
+import secrets
 import socket
 import subprocess
 import time
@@ -123,6 +124,21 @@ class DjiWifiHandshakeProfile:
     )
     provenance: str = "Mimo Pocket 3 PCAP SHA256 8e7c7eb6...139a181c"
 
+    @classmethod
+    def fresh(cls) -> "DjiWifiHandshakeProfile":
+        """Create a new client-owned UDP session identity.
+
+        The capture proves both fields are session state. Reusing them also
+        reuses DUML sequence zero, which Pocket treats as an old transaction
+        after a previous control socket closes.
+        """
+
+        return cls(
+            session_id=secrets.randbelow(0xFFFF) + 1,
+            sequence_seed=secrets.randbelow(0x2000) * 8,
+            provenance="fresh per-connection identity; structure from Mimo capture",
+        )
+
     def encode(self) -> bytes:
         metadata = (
             self.sequence_seed.to_bytes(2, "little")
@@ -185,7 +201,7 @@ class DjiWifiUdpTransport:
             raise ValueError("local UDP port outside 1..65535")
         self.target_port = target_port
         self.local_port = local_port
-        self.handshake_profile = handshake_profile or DjiWifiHandshakeProfile()
+        self.handshake_profile = handshake_profile or DjiWifiHandshakeProfile.fresh()
         self.socket_factory = socket_factory
         self.event_handler = event_handler or (lambda event: None)
         self.socket: socket.socket | None = None
@@ -389,6 +405,8 @@ class DjiWifiUdpTransport:
             )
         try:
             envelope = DjiWifiEnvelope.parse(data)
+            if envelope.session_id != self.handshake_profile.session_id:
+                raise ValueError("keepalive response belongs to another UDP session")
             keepalive_sequence = decode_control_keepalive_response(envelope.payload)
         except Exception:
             keepalive_sequence = None

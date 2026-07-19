@@ -106,6 +106,15 @@ def test_handshake_is_structured_and_matches_mimo_capture() -> None:
     )
 
 
+def test_fresh_handshake_identity_is_nonzero_aligned_and_not_capture_replay(monkeypatch) -> None:
+    values = iter((0x1233, 0x456))
+    monkeypatch.setattr("openframetap.transport.dji_wifi_udp.secrets.randbelow", lambda _n: next(values))
+    profile = DjiWifiHandshakeProfile.fresh()
+    assert profile.session_id == 0x1234
+    assert profile.sequence_seed == 0x456 * 8
+    assert (profile.session_id, profile.sequence_seed) != (0x7055, 0x82A8)
+
+
 def test_target_and_publisher_parsing_reject_tailscale() -> None:
     text = "0 0 192.168.2.224:1935 192.168.2.1:45678\n"
     assert parse_rtmp_publisher_ips(text) == ("192.168.2.1",)
@@ -143,7 +152,9 @@ def test_target_port_and_local_port_ownership() -> None:
 
 def test_transport_accepts_only_structured_command_and_single_writer() -> None:
     async def scenario() -> None:
-        transport = DjiWifiUdpTransport("192.168.2.1")
+        transport = DjiWifiUdpTransport(
+            "192.168.2.1", handshake_profile=DjiWifiHandshakeProfile()
+        )
         transport.socket = object()  # _sendto is replaced; no real network I/O.
         transport.sequencer = DjiWifiOperatorSequencer(0x7055, 8, 0)
         gate = asyncio.Event()
@@ -168,7 +179,9 @@ def test_transport_accepts_only_structured_command_and_single_writer() -> None:
 
 def test_transport_ack_updates_next_operator_envelope_peer_sequence() -> None:
     async def scenario() -> None:
-        transport = DjiWifiUdpTransport("192.168.2.1")
+        transport = DjiWifiUdpTransport(
+            "192.168.2.1", handshake_profile=DjiWifiHandshakeProfile()
+        )
         transport.socket = object()
         transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82B0, 0x82A8)
         ack = DjiWifiBasicHeader(
@@ -202,7 +215,9 @@ def test_transport_ack_updates_next_operator_envelope_peer_sequence() -> None:
 
 def test_transport_matches_control_keepalive_response_by_duml_sequence() -> None:
     async def scenario() -> None:
-        transport = DjiWifiUdpTransport("192.168.2.1")
+        transport = DjiWifiUdpTransport(
+            "192.168.2.1", handshake_profile=DjiWifiHandshakeProfile()
+        )
         transport.socket = object()
         transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82B0, 0x82A8)
         sent = []

@@ -193,20 +193,21 @@ class LiveWifiControlSession:
             await asyncio.wait_for(udp_ready.wait(), timeout=1.0)
             await controller.start_watchdog()
 
-            async def send_verified_keepalive() -> None:
+            async def send_verified_keepalive(*, initial: bool = False) -> None:
                 expected = transport.keepalive_response_count + 1
                 await transport.send_control_keepalive()
-                deadline = time.monotonic() + 0.5
-                while transport.keepalive_response_count < expected:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError("Pocket 04/50 control keepalive response timed out")
-                    await asyncio.sleep(0.01)
+                if initial:
+                    deadline = time.monotonic() + 1.5
+                    while transport.keepalive_response_count < expected:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Pocket initial 04/50 control keepalive response timed out")
+                        await asyncio.sleep(0.01)
                 self._set(
                     keepalive_sent_count=transport.keepalive_sent_count,
                     keepalive_response_count=transport.keepalive_response_count,
                 )
 
-            await send_verified_keepalive()
+            await send_verified_keepalive(initial=True)
             last_keepalive_send_ns = time.monotonic_ns()
             await controller.arm(WifiControlPrerequisites(*([True] * 9)))
             self._ready.set()
@@ -271,6 +272,13 @@ class LiveWifiControlSession:
                 if now - last_keepalive_send_ns >= 1_000_000_000:
                     await send_verified_keepalive()
                     last_keepalive_send_ns = time.monotonic_ns()
+                last_response_ns = transport.last_keepalive_response_ns
+                if (
+                    last_response_ns is None
+                    or now - last_response_ns > 2_500_000_000
+                ):
+                    await controller.emergency_stop("control_keepalive_stale")
+                    raise TimeoutError("Pocket 04/50 control keepalive stale for 2.5 seconds")
                 stale = not value.monotonic_ns or now - value.monotonic_ns > 250_000_000
                 quantized = Pocket3StickCommand.from_axes(
                     yaw_axis=value.yaw / LIVE_MAXIMUM_INPUT,

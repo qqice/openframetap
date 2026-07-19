@@ -817,6 +817,7 @@ class GtkReadOnlyApp:
                         "maximum_input": 0.20,
                         "rate_hz": 10,
                         "watchdog_ms": 250,
+                        "control_keepalive_timeout_ms": 2500,
                         "continuous_limit_seconds": 2,
                     }
                     if self.live_control

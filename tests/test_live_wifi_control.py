@@ -26,6 +26,7 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
             self.last_ack_sequence = None
             self.keepalive_sent_count = 0
             self.keepalive_response_count = 0
+            self.last_keepalive_response_ns = None
             self.__class__.instances.append(self)
 
         async def open(self) -> None:
@@ -38,6 +39,7 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
         async def send_control_keepalive(self):
             self.keepalive_sent_count += 1
             self.keepalive_response_count += 1
+            self.last_keepalive_response_ns = time.monotonic_ns()
             return {"kind": "control_keepalive"}
 
         async def receive_datagram(self):
