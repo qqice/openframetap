@@ -3,8 +3,10 @@
 This document records the command research used for OpenFrameTap's bounded
 active-control prototype. Cross-product DUML similarities are evidence for
 where to look, not proof of Pocket 3 behavior. Raw PWM, calibration, recenter,
-mode, camera, Wi-Fi, and livestream commands remain outside this phase's
-control allowlist.
+mode, camera, Wi-Fi provisioning, and livestream commands remain outside the
+gimbal-control allowlist. The sole active-control exception is the structured,
+capture-verified Wi-Fi `04/01` profile described below; arbitrary raw payloads
+and every other raw-PWM form remain prohibited.
 
 ## Read-only reference snapshots
 
@@ -25,7 +27,7 @@ retained below.
 
 | Command | Schema and state | ACK | Zero/stop semantics | Risk and decision |
 | --- | --- | --- | --- | --- |
-| 04/01 raw PWM | Public sources describe 3×uint16, range 363–1685; the Pocket 3 Mimo Wi-Fi capture uses 10 bytes | no ACK in the capture | Mimo centers pitch/yaw at 1024 and sends a centered frame on every release | **Hardware-observed but still explicitly prohibited.** It bypasses a calibrated rate abstraction and the four Pocket-specific trailing bytes are not understood. |
+| 04/01 structured Pocket 3 stick | Public sources describe 3×uint16, range 363–1685; the Pocket 3 Mimo Wi-Fi capture proves a 10-byte Pocket-specific form | no ACK in the capture | Mimo centers pitch/yaw at 1024 and sends a centered frame on every release | **Narrowly allowlisted over UDP only.** Callers provide normalized yaw/pitch, while the encoder fixes roll=0, offset 6=`0x8000`, offset 8=`0x0042`, endpoints and flags. Raw bytes and other variants are rejected. |
 | 04/0A external angle | 10 bytes; absolute target candidate | request in public Pocket code | no continuous zero-rate semantic | Denied. Persistent target movement is a worse match for a dead-man joystick. |
 | 04/0B control status | empty query candidate | unknown | none | Not sent; this phase does not introduce a separate query. |
 | 04/0C external accel/speed | three int16 LE values ×0.1 degree/s candidate plus flags | request/ACK in RS 3 evidence; no Pocket ACK observed by public WIP | zero rates with same control flag was the local stop candidate; RS 3 also documents all-zero flag 0 as release | The current BLE profile was rejected by the bounded Pocket test. Wi-Fi acceptance is unverified and it remains denied. |
@@ -205,9 +207,50 @@ layout or its trailing constants.
 actions. It uses Wi-Fi `04/01`. This explains why the bounded BLE `04/0C` test
 produced no motion, but does not prove whether `04/0C` could work over Wi-Fi.
 
-Safety decision: `04/01` remains blocked by the existing raw-PWM denylist. The
-capture is protocol evidence, not authorization to send it. OpenFrameTap must
-not copy Mimo's command into the live allowlist unless the raw-PWM prohibition
-is deliberately replaced by a separately reviewed safety policy. The unknown
-20-byte UDP envelope and `04/50` exchange also require offline reconstruction
-before any Wi-Fi writer can exist.
+That safety decision was subsequently replaced by the explicit constrained
+policy below after the 20-byte envelope was reconstructed and all 555 target
+datagrams round-tripped byte-for-byte. `04/50` remains prohibited.
+
+## Structured Wi-Fi center validation: 2026-07-20
+
+Private evidence session: `wifi-gimbal-test-20260720-010538`. The raw capture
+and device/network identifiers are not committed. The source manifest and all
+13 listed evidence files passed SHA-256 verification after the directory was
+pulled back from ROCK 4D.
+
+【实机事实】The wrapper first restored the previously interrupted, already
+validated RTMP session. It then discovered the current Pocket publisher rather
+than using the older PCAP address, bound the Mimo-observed local UDP port 54232,
+completed the structured transport handshake, and sent exactly eight `04/01`
+center commands. No non-center command or `04/50` was sent.
+
+【实机事实】The restricted LINUX_SLL2 packet capture contains nine outbound
+control-session datagrams: one 48-byte transport handshake followed by eight
+43-byte enveloped DUML center frames. They match `sent-datagrams.jsonl` in exact
+byte order. The transport sequences advance by eight, the DUML sequences and
+message counters advance by one, every payload is
+`00040000000400804200`, and the final controller state is `centered`.
+
+【实机事实】The owner observed no visible gimbal movement, no Pocket error, no
+RTMP interruption and no need for restart or manual recovery. BlueZ remained
+connected. BTSnoop contains zero app-to-device gimbal writes, confirming that
+FFF5 was not used; only the permitted notification subscription lifecycle was
+performed.
+
+【统计观察】The session received 25 valid DUML frames with zero CRC or
+reassembly failures. Six locally recorded `04/05` candidates kept yaw offset
+16 fixed at 17048, roll offset 22 fixed at 8, and pitch offset 20 within 94–95.
+The one-unit pitch variation is consistent with the earlier static baseline;
+there is no telemetry evidence of center-induced motion.
+
+【捕获推断】The structured zero/center form is safe enough to unblock one
+separate, bounded yaw-positive test at offset 16. This does not yet establish
+that Pocket accepts non-center control, that the UI sign is correct, or that
+the center sequence stops an actual motion. Those claims require visual and
+telemetry evidence from the next one-direction pulse.
+
+Current limits remain: two non-center frames at 10 Hz, offset exactly 16,
+250 ms watchdog, 500 ms absolute hard limit, then five centers at 20 Hz,
+300 ms wait, one final center and a two-second observation interval. Any
+unexpected direction, continued motion, Pocket error, BLE/RTMP loss or manual
+recovery requirement stops active testing.
