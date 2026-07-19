@@ -175,6 +175,8 @@ Usage:
   ./scripts/remote.sh display-doctor
   ./scripts/remote.sh video-benchmark <local-sample>
   ./scripts/remote.sh preview-file <local-sample>
+  ./scripts/remote.sh analyze-wifi-media <local-pcap>
+  ./scripts/remote.sh preview-wifi-capture <local-pcap> [seconds]
   ./scripts/remote.sh live-preview [seconds]
   ./scripts/remote.sh preview-status
   ./scripts/remote.sh preview-stop
@@ -1023,6 +1025,60 @@ printf 'ARTIFACT_DIR=private/$stem\n'"
     status=$?
     run_remote video-benchmark-cleanup "cd $REMOTE_DIR && rm -f '$remote_sample'" || true
     pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    exit "$status"
+    ;;
+  analyze-wifi-media)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    capture_path="$2"
+    [[ -f "$capture_path" ]] || { echo "capture not found: $capture_path" >&2; exit 2; }
+    [[ -x "$LOCAL_PYTHON_BIN" ]] || {
+      echo "local Python unavailable: $LOCAL_PYTHON_BIN" >&2
+      exit 2
+    }
+    stamp="$(timestamp)"
+    output_dir="$ROOT_DIR/artifacts/private/normal-mode-pcap-analysis-$stamp"
+    printf '[openframetap] Offline capture: %s\n' "$capture_path"
+    printf '[openframetap] Private output: %s\n' "$output_dir"
+    "$LOCAL_PYTHON_BIN" -m openframetap analyze dji-wifi-media \
+      "$capture_path" --output-dir "$output_dir"
+    ;;
+  preview-wifi-capture)
+    [[ $# -ge 2 && $# -le 3 ]] || { usage >&2; exit 2; }
+    capture_path="$2"
+    seconds="${3:-30}"
+    [[ -f "$capture_path" ]] || { echo "capture not found: $capture_path" >&2; exit 2; }
+    [[ "$seconds" =~ ^[1-9][0-9]*$ && "$seconds" -le 120 ]] || {
+      echo 'preview-wifi-capture seconds must be an integer from 1 to 120' >&2
+      exit 2
+    }
+    [[ -x "$LOCAL_PYTHON_BIN" ]] || {
+      echo "local Python unavailable: $LOCAL_PYTHON_BIN" >&2
+      exit 2
+    }
+    stamp="$(timestamp)"
+    extract_stem="normal-mode-pcap-analysis-$stamp"
+    extract_dir="$ROOT_DIR/artifacts/private/$extract_stem"
+    "$LOCAL_PYTHON_BIN" -m openframetap analyze dji-wifi-media \
+      "$capture_path" --output-dir "$extract_dir" || exit $?
+    deploy || exit $?
+    preview_stem="normal-mode-preview-$stamp"
+    remote_sample="artifacts/private/video-input/$stamp-normal-mode.h264"
+    run_remote normal-mode-preview-stage "set -eu
+cd $REMOTE_DIR
+mkdir -p artifacts/private/video-input artifacts/private/$preview_stem artifacts/sanitized/$preview_stem
+chmod 700 artifacts/private/video-input artifacts/private/$preview_stem" || exit $?
+    "$SCP_BIN" "${SSH_OPTIONS[@]}" "$extract_dir/video.h264" \
+      "$TARGET:${REMOTE_DIR#\~/}/$remote_sample.new" || exit $?
+    run_remote normal-mode-preview-run "set -eu
+cd $REMOTE_DIR
+mv '$remote_sample.new' '$remote_sample'
+chmod 600 '$remote_sample'
+.venv/bin/python -m openframetap video preview-h264 --input '$remote_sample' --decoder auto --sink wayland --fullscreen --framerate 30 --duration '$seconds' --private-output 'artifacts/private/$preview_stem' --sanitized-output 'artifacts/sanitized/$preview_stem'
+printf 'ARTIFACT_DIR=private/$preview_stem\n'"
+    status=$?
+    run_remote normal-mode-preview-cleanup "cd $REMOTE_DIR && rm -f '$remote_sample'" || true
+    pull_dir "artifacts/private/$preview_stem" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_dir "artifacts/sanitized/$preview_stem" "$ROOT_DIR/artifacts/sanitized" || exit $?
     exit "$status"
     ;;
   preview-file)

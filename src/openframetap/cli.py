@@ -154,6 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dji_wifi_envelope.add_argument("capture", type=Path)
     dji_wifi_envelope.add_argument("--output", type=Path)
+    dji_wifi_media = analyze_commands.add_parser(
+        "dji-wifi-media", help="reconstruct Pocket Wi-Fi H.264 from an immutable PCAP"
+    )
+    dji_wifi_media.add_argument("capture", type=Path)
+    dji_wifi_media.add_argument("--output-dir", type=Path, required=True)
 
     app = subcommands.add_parser("app", help="fullscreen OpenFrameTap video and control UI")
     app_mode = app.add_mutually_exclusive_group()
@@ -207,6 +212,17 @@ def build_parser() -> argparse.ArgumentParser:
     preview_file.add_argument("--duration", type=int, default=20)
     preview_file.add_argument("--private-output", type=Path, required=True)
     preview_file.add_argument("--sanitized-output", type=Path, required=True)
+    preview_h264 = video_commands.add_parser(
+        "preview-h264", help="play one extracted Annex-B stream with an explicit decoder"
+    )
+    preview_h264.add_argument("--input", type=Path, required=True)
+    preview_h264.add_argument("--decoder", default="auto")
+    preview_h264.add_argument("--sink", choices=("wayland",), default="wayland")
+    preview_h264.add_argument("--fullscreen", action="store_true")
+    preview_h264.add_argument("--framerate", type=int, default=30)
+    preview_h264.add_argument("--duration", type=int, default=20)
+    preview_h264.add_argument("--private-output", type=Path, required=True)
+    preview_h264.add_argument("--sanitized-output", type=Path, required=True)
     live_preview = video_commands.add_parser(
         "live-preview", help="bounded low-latency Pocket 3 preview"
     )
@@ -614,6 +630,20 @@ def main(argv: list[str] | None = None) -> int:
                 "all_target_reencoded_equal",
             )
         ) else 1
+    if args.command == "analyze" and args.analyze_command == "dji-wifi-media":
+        from openframetap.analysis.dji_wifi_media import extract_dji_wifi_media
+
+        try:
+            payload = extract_dji_wifi_media(args.capture, args.output_dir)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"DJI_WIFI_MEDIA_ANALYSIS_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2))
+        return 0 if (
+            payload["source_immutable"]
+            and payload["exact_access_unit_count"] > 0
+            and payload["elementary_stream"]["bytes"] > 0
+        ) else 1
     if args.command == "app":
         from openframetap.video.player_process import ProcessRegistry
 
@@ -776,6 +806,28 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             print(f"PREVIEW_FILE_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if payload["decode_errors"] == 0 else 1
+    if args.command == "video" and args.video_command == "preview-h264":
+        from openframetap.video.live_preview import run_preview
+        from openframetap.workflows.pocket3_preview import h264_preview_spec
+
+        try:
+            spec = h264_preview_spec(
+                args.input,
+                decoder=args.decoder,
+                fullscreen=args.fullscreen,
+                framerate=args.framerate,
+            )
+            payload = run_preview(
+                spec,
+                private_output=args.private_output,
+                sanitized_output=args.sanitized_output,
+                duration_seconds=args.duration,
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"PREVIEW_H264_FAILED: {exc}")
             return 1
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0 if payload["decode_errors"] == 0 else 1

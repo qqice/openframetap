@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from openframetap.video.decoder_probe import discover_decoders
-from openframetap.video.pipelines import PipelineProfile, live_pipeline, offline_pipeline
+from openframetap.video.pipelines import (
+    PipelineProfile,
+    live_pipeline,
+    offline_h264_pipeline,
+    offline_pipeline,
+)
 
 
 def select_decoder(requested: str = "auto") -> str:
@@ -34,6 +39,24 @@ def file_preview_spec(
         sink="wayland",
         fullscreen=fullscreen,
         profile=PipelineProfile.STABLE,
+    )
+
+
+def h264_preview_spec(
+    path: Path,
+    *,
+    decoder: str = "auto",
+    fullscreen: bool = False,
+    framerate: int = 30,
+):
+    selected = select_decoder(decoder)
+    return offline_h264_pipeline(
+        path,
+        decoder=selected,
+        sink="wayland",
+        fullscreen=fullscreen,
+        profile=PipelineProfile.STABLE,
+        framerate=framerate,
     )
 
 

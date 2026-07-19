@@ -21,6 +21,7 @@ from openframetap.video.latency import parse_latency_tracer
 from openframetap.video.pipelines import (
     PipelineProfile,
     live_pipeline,
+    offline_h264_pipeline,
     offline_pipeline,
     profile_parameters,
 )
@@ -73,6 +74,24 @@ def test_offline_pipeline_has_explicit_decoder_and_no_fallback(tmp_path: Path) -
     assert "mppvideodec" in spec.elements
     assert "decodebin" not in spec.argv
     assert "h264parse" in spec.argv
+
+
+def test_annex_b_pipeline_keeps_hardware_decode_and_omits_flv_demux(
+    tmp_path: Path,
+) -> None:
+    spec = offline_h264_pipeline(
+        tmp_path / "capture.h264",
+        decoder="mppvideodec",
+        sink="wayland",
+        fullscreen=True,
+        framerate=30,
+    )
+    assert spec.source_kind == "h264-annex-b"
+    assert "mppvideodec" in spec.argv
+    assert "flvdemux" not in spec.argv
+    assert "decodebin" not in spec.argv
+    assert any("framerate=30/1" in item for item in spec.argv)
+    assert spec.fullscreen
 
 
 def test_live_rtmp_and_rtsp_sources_are_structured_and_hls_is_forbidden() -> None:

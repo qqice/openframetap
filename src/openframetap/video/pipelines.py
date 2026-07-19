@@ -142,6 +142,58 @@ def offline_pipeline(
     )
 
 
+def offline_h264_pipeline(
+    path: Path,
+    *,
+    decoder: str,
+    sink: str = "fakesink",
+    fullscreen: bool = False,
+    profile: PipelineProfile = PipelineProfile.STABLE,
+    framerate: int = 30,
+) -> PipelineSpec:
+    """Play an extracted Annex-B stream without routing frames through Python."""
+
+    if not 1 <= framerate <= 240:
+        raise ValueError("H.264 preview framerate must be 1..240")
+    params = profile_parameters(profile)
+    elements = (
+        "filesrc",
+        "queue",
+        "h264parse",
+        "capsfilter",
+        decoder,
+        "fpsdisplaysink" if sink == "fakesink" else sink,
+    )
+    argv = (
+        "gst-launch-1.0",
+        "-e",
+        "filesrc",
+        f"location={path}",
+        "!",
+        "queue",
+        *params["queue"],
+        "!",
+        "h264parse",
+        "config-interval=-1",
+        "!",
+        f"video/x-h264,stream-format=byte-stream,alignment=au,framerate={framerate}/1",
+        "!",
+        decoder,
+        "name=app_decoder" if sink == "gtkwayland" else "name=preview_decoder",
+        "!",
+        *_sink_tokens(sink, fullscreen=fullscreen, sync=params["sink_sync"]),
+    )
+    return PipelineSpec(
+        "h264-annex-b",
+        decoder,
+        sink,
+        profile.value,
+        elements,
+        argv,
+        fullscreen=fullscreen,
+    )
+
+
 def live_pipeline(
     url: str,
     *,
