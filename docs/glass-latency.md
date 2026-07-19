@@ -55,14 +55,15 @@ For reproducible non-interactive reruns, replace `--interactive-roi` with both `
 The analyzer:
 
 1. hashes the original video and probes codec, geometry, frame rates, time base, per-frame timestamps, duration, and VFR behavior;
-2. rectifies both ROIs to the canonical 16:9 layout;
-3. derives a local black/white threshold from fixed reference cells;
-4. decodes both Gray banks, rejects low contrast and ambiguous bits, and isolates mixed-refresh samples;
-5. handles 16-bit wraparound without searching for a convenient global offset;
-6. maps SOURCE and displayed IDs to the pattern submission log;
-7. calculates per-phone-frame latency, run-lengths, percentiles, MAD, long tail, and transition statistics;
-8. re-hashes the input video and fails if it changed;
-9. writes private evidence plus a path-free sanitized summary and six independent plots.
+2. rescales a slow-motion container timeline when an explicit physical capture rate differs from the encoded playback rate;
+3. tracks the fragmented outer green border per frame and rectifies both moving ROIs to the canonical 16:9 layout;
+4. normalizes B/G/R independently against each screen's own black/white references, then rejects chromatic rolling-shutter bands;
+5. decodes both Gray banks, rejects low contrast and ambiguous bits, and isolates mixed-refresh samples;
+6. handles 16-bit wraparound without searching for a convenient global offset;
+7. maps SOURCE and displayed IDs to the pattern submission log;
+8. calculates per-phone-frame latency, run-lengths, percentiles, MAD, long tail, and transition statistics;
+9. re-hashes the input video and fails if it changed;
+10. writes private evidence plus a path-free sanitized summary and six independent plots.
 
 The main latency statistics include all valid phone sampling instants. Consecutive phone frames that see the same DSI ID are separately represented by DSI run-length encoding and are not automatically called decoder drops. Pattern IDs skipped between DSI transitions include normal approximately 30 fps camera sampling and also cannot by themselves prove RTMP/decode loss.
 
@@ -70,6 +71,8 @@ The main latency statistics include all valid phone sampling instants. Consecuti
 
 - 【实机事实】 Synthetic pattern images, inversion, perspective distortion, low contrast, one-bit mixed refresh, VFR metadata, wraparound, timing-map constraints, input immutability, sanitization, and a compressed synthetic phone video are covered by offline tests.
 - 【实机事实】 The synthetic video recovered its injected 100 ms delay with greater than 90% Gray decoding success.
-- 【待验证假设】 No physical phone recording has been analyzed yet, so median, p95, p99, rolling-shutter rate, and the final stable-versus-low-latency comparison remain unknown.
+- 【实机事实】 Three independent Pocket 4P 240 fps slow-motion recordings have now been analyzed for low-latency, stable, and aggressive receiver profiles. See [glass-latency-results.md](glass-latency-results.md).
+- 【统计观察】 The conservative raw-frame decode rates were 32.80%, 19.01%, and 10.99%. They did not meet the predeclared 90% first-round method gate because colour rolling-shutter bands crossed Gray cells on both displays.
+- 【待验证假设】 The physical distributions are statistically stable across stricter confidence thresholds, but remain exploratory rather than a method-valid final benchmark. A better recording geometry or reduced display banding is still required to satisfy the original gate.
 
-Only after the first method-valid recording should `stable` receive its own independent phone recording. `aggressive-low-latency` remains optional because receiver testing already showed more active drops and a larger long tail.
+The existing `low-latency` default is retained. This is not a claim that the failed method gate selected a final winner: stable was clearly much slower, while aggressive did not improve the median and retained startup-tail/runtime-drop evidence.

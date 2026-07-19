@@ -55,6 +55,8 @@ Run POSIX scripts from Git Bash on Windows. Set `ROCK4D_SSH_HOST` when the defau
 ./scripts/remote.sh pocket3-rtmp-propose-wifi
 ```
 
+The first three-profile physical results and their explicit method limitation are documented in [docs/glass-latency-results.md](docs/glass-latency-results.md).
+
 The final command is an owner-operated, interactive, single-send wrapper for
 the fixed `prepare_to_live_stream` proposal only. It verifies the approved
 frame SHA-256 before deployment and still requires the full SHA-256 to be typed
