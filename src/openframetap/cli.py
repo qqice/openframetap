@@ -149,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
     mimo_wifi_gimbal.add_argument(
         "--actions", default="yaw_right,yaw_left,pitch_up,pitch_down"
     )
+    dji_wifi_envelope = analyze_commands.add_parser(
+        "dji-wifi-envelope", help="validate and round-trip DJI Wi-Fi transport envelopes"
+    )
+    dji_wifi_envelope.add_argument("capture", type=Path)
+    dji_wifi_envelope.add_argument("--output", type=Path)
 
     app = subcommands.add_parser("app", help="fullscreen OpenFrameTap video and control UI")
     app_mode = app.add_mutually_exclusive_group()
@@ -553,6 +558,31 @@ def main(argv: list[str] | None = None) -> int:
             "companion_04_50": payload["companion_04_50"],
         }, indent=2))
         return 0
+    if args.command == "analyze" and args.analyze_command == "dji-wifi-envelope":
+        from openframetap.analysis.mimo_wifi import (
+            analyze_dji_wifi_envelope,
+            write_dji_wifi_envelope_analysis,
+        )
+
+        try:
+            payload = (
+                write_dji_wifi_envelope_analysis(args.capture, args.output)
+                if args.output
+                else analyze_dji_wifi_envelope(args.capture)
+            )
+        except (OSError, ValueError) as exc:
+            print(f"DJI_WIFI_ENVELOPE_ANALYSIS_FAILED: {exc}")
+            return 1
+        print(json.dumps(payload, indent=2))
+        validation = payload["validation"]
+        return 0 if all(
+            validation[key]
+            for key in (
+                "all_target_checksums_valid",
+                "all_target_lengths_valid",
+                "all_target_reencoded_equal",
+            )
+        ) else 1
     if args.command == "app":
         from openframetap.video.player_process import ProcessRegistry
 

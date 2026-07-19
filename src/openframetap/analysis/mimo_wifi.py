@@ -12,6 +12,7 @@ import statistics
 import struct
 
 from openframetap.protocol.reassembly import DumlStreamReassembler
+from openframetap.protocol.dji_wifi import DjiWifiEnvelope, DjiWifiEnvelopeError
 
 
 DLT_RAW = 101
@@ -313,6 +314,138 @@ def write_mimo_wifi_analysis(
     action_labels: tuple[str, ...] = ("yaw_right", "yaw_left", "pitch_up", "pitch_down"),
 ) -> dict:
     result = analyze_mimo_wifi_gimbal(source, action_labels=action_labels)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return result
+
+
+def _wrapped_uint16_delta(after: int, before: int) -> int:
+    return (after - before) & 0xFFFF
+
+
+def analyze_dji_wifi_envelope(path: Path) -> dict:
+    """Validate Mimo's standard 20-byte envelope without mutating the PCAP."""
+
+    datagrams, metadata = _read_udp(path)
+    envelopes: list[tuple[UdpDatagram, DjiWifiEnvelope]] = []
+    decoded: list[tuple[UdpDatagram, DjiWifiEnvelope, object]] = []
+    for datagram in datagrams:
+        if len(datagram.payload) < 20:
+            continue
+        try:
+            envelope = DjiWifiEnvelope.parse(datagram.payload)
+        except DjiWifiEnvelopeError:
+            continue
+        envelopes.append((datagram, envelope))
+        if not envelope.payload.startswith(b"\x55"):
+            continue
+        frames = _frames(datagram)
+        exact = [item for item in frames if item["offset"] == 20]
+        if len(exact) != 1:
+            continue
+        decoded.append((datagram, envelope, exact[0]["frame"]))
+
+    control_by_flow: dict[tuple[str, int, str, int], list] = defaultdict(list)
+    for item in decoded:
+        datagram, _envelope, frame = item
+        if (
+            frame.sender == 0x02
+            and frame.receiver == 0x04
+            and frame.cmd_set == 0x04
+            and frame.cmd_id == 0x01
+        ):
+            control_by_flow[datagram.flow].append(item)
+    if not control_by_flow:
+        raise ValueError("no enveloped app-to-gimbal 04/01 flow found")
+    flow, controls = max(control_by_flow.items(), key=lambda item: len(item[1]))
+    upstream = [item for item in envelopes if item[0].flow == flow and item[1].wh_type == 5]
+    selected = [
+        item
+        for item in decoded
+        if item[0].flow == flow
+        if (item[2].cmd_set, item[2].cmd_id) in {(0x04, 0x01), (0x04, 0x50)}
+    ]
+    selected.sort(key=lambda item: item[0].timestamp)
+    sequences = [item[1].transport_sequence for item in upstream]
+    message_sequences = [item[1].message_sequence for item in upstream]
+    sequence_deltas = [
+        _wrapped_uint16_delta(after, before)
+        for before, after in zip(sequences, sequences[1:])
+    ]
+    message_deltas = [
+        ((after & 0xFF) - (before & 0xFF)) & 0xFF
+        for before, after in zip(message_sequences, message_sequences[1:])
+    ]
+    reencoded_matches = sum(envelope.encode() == datagram.payload for datagram, envelope, _ in selected)
+    length_matches = sum(
+        envelope.total_length == 20 + frame.total_length
+        for _datagram, envelope, frame in selected
+    )
+    checksum_matches = sum(envelope.checksum_valid for _datagram, envelope, _frame in selected)
+    field_values = {
+        "format_nibble": sorted({item[1].format_nibble for item in selected}),
+        "session_id": sorted({item[1].session_id for item in selected}),
+        "wh_type": sorted({item[1].wh_type for item in selected}),
+        "reserved_12_15_hex": sorted({item[1].reserved_12_15.hex() for item in selected}),
+        "message_sequence_high_byte": sorted({item[1].message_sequence >> 8 for item in selected}),
+        "delivery_flags": dict(Counter(item[1].delivery_flags for item in selected)),
+        "reserved_19": sorted({item[1].reserved_19 for item in selected}),
+    }
+    command_counts = Counter(f"{item[2].cmd_set:02X}/{item[2].cmd_id:02X}" for item in selected)
+    delivery_by_command: dict[str, Counter] = defaultdict(Counter)
+    for _datagram, envelope, frame in selected:
+        delivery_by_command[f"{frame.cmd_set:02X}/{frame.cmd_id:02X}"][envelope.delivery_flags] += 1
+    return {
+        "source_file": path.name,
+        "source_sha256": _sha256(path),
+        **metadata,
+        "selected_flow": {
+            "source_ip": flow[0],
+            "source_port": flow[1],
+            "destination_ip": flow[2],
+            "destination_port": flow[3],
+        },
+        "upstream_standard_envelope_count": len(upstream),
+        "target_command_count": len(selected),
+        "command_counts": dict(sorted(command_counts.items())),
+        "field_values": field_values,
+        "dynamic_fields": {
+            "transport_sequence_first": sequences[0] if sequences else None,
+            "transport_sequence_last": sequences[-1] if sequences else None,
+            "plus_8_transition_count": sum(delta == 8 for delta in sequence_deltas),
+            "transition_count": len(sequence_deltas),
+            "transport_wrap_count": sum(after < before for before, after in zip(sequences, sequences[1:])),
+            "message_plus_1_transition_count": sum(delta == 1 for delta in message_deltas),
+            "message_transition_count": len(message_deltas),
+            "message_low_byte_wrap_count": sum(
+                (after & 0xFF) < (before & 0xFF)
+                for before, after in zip(message_sequences, message_sequences[1:])
+            ),
+        },
+        "validation": {
+            "header_checksum_algorithm": "xor bytes 0..7 equals zero",
+            "checksum_valid_count": checksum_matches,
+            "length_equals_20_plus_duml_count": length_matches,
+            "reencoded_byte_equal_count": reencoded_matches,
+            "target_count": len(selected),
+            "all_target_checksums_valid": checksum_matches == len(selected),
+            "all_target_lengths_valid": length_matches == len(selected),
+            "all_target_reencoded_equal": reencoded_matches == len(selected),
+        },
+        "delivery_flags_by_command": {
+            key: dict(value) for key, value in sorted(delivery_by_command.items())
+        },
+        "provenance": {
+            "unknown_delivery_flag": (
+                "0x60 is captured but its trigger/semantics are unresolved; generator is fail-closed to 0x00"
+            ),
+            "session_id": "capture/session-specific; not treated as a universal DJI signature",
+        },
+    }
+
+
+def write_dji_wifi_envelope_analysis(source: Path, output: Path) -> dict:
+    result = analyze_dji_wifi_envelope(source)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
