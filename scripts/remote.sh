@@ -180,6 +180,9 @@ Usage:
   ./scripts/remote.sh preview-stop
   ./scripts/remote.sh media-status
   ./scripts/remote.sh media-stop-all
+  ./scripts/remote.sh app-start [seconds]
+  ./scripts/remote.sh app-status
+  ./scripts/remote.sh app-stop
   ./scripts/remote.sh rtmp-self-test
   ./scripts/remote.sh pocket3-rtmp-send-approved-prepare
   ./scripts/remote.sh pocket3-rtmp-send-approved-wifi
@@ -207,6 +210,41 @@ case "$action" in
     ;;
   deploy)
     deploy
+    ;;
+  app-start)
+    seconds="${2:-600}"
+    [[ "$seconds" =~ ^[0-9]+$ ]] && (( seconds >= 1 && seconds <= 3600 )) || {
+      echo 'app-start seconds must be an integer from 1 to 3600' >&2
+      exit 2
+    }
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="app-session-$stamp"
+    run_remote app-start "set -eu
+cd $REMOTE_DIR
+test -f artifacts/private/approved-live-preview/stream.json
+.venv/bin/python -m openframetap app --background --duration '$seconds' --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem' --control-mode disabled
+printf 'APP_OUTPUT=%s\\n' 'artifacts/private/$stem'"
+    ;;
+  app-status)
+    run_remote app-status "set -eu
+cd $REMOTE_DIR
+.venv/bin/python -m openframetap app --status"
+    ;;
+  app-stop)
+    run_remote app-stop "set -eu
+cd $REMOTE_DIR
+last=\$(cat runtime/app-last-output.txt 2>/dev/null || true)
+.venv/bin/python -m openframetap app --stop
+printf 'APP_OUTPUT=%s\\n' \"\$last\""
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    output_path="$(extract_stem 'APP_OUTPUT')"
+    if [[ "$output_path" == artifacts/private/app-session-* ]]; then
+      stem="${output_path##*/}"
+      pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+      pull_dir "artifacts/sanitized/$stem" "$ROOT_DIR/artifacts/sanitized" || exit $?
+    fi
     ;;
   rtmp-install)
     binary="$MEDIAMTX_CACHE/mediamtx"

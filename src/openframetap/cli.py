@@ -137,6 +137,29 @@ def build_parser() -> argparse.ArgumentParser:
     glass_latency.add_argument("--phone-model")
     glass_latency.add_argument("--ambient-notes")
 
+    app = subcommands.add_parser("app", help="fullscreen OpenFrameTap video and control UI")
+    app_mode = app.add_mutually_exclusive_group()
+    app_mode.add_argument("--status", action="store_true")
+    app_mode.add_argument("--stop", action="store_true")
+    app.add_argument("--background", action="store_true")
+    app.add_argument(
+        "--proposal",
+        type=Path,
+        default=Path("artifacts/private/approved-live-preview/stream.json"),
+    )
+    app.add_argument(
+        "--address",
+        default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
+    )
+    app.add_argument("--duration", type=int, default=600)
+    app.add_argument("--output", type=Path)
+    app.add_argument("--sanitized-output", type=Path)
+    app.add_argument("--no-ble", action="store_true")
+    app.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
+    app.add_argument(
+        "--control-mode", choices=("disabled", "mock", "live"), default="disabled"
+    )
+
     video = subcommands.add_parser("video", help="user-space RTMP ingest tools")
     video_commands = video.add_subparsers(dest="video_command", required=True)
     video_doctor = video_commands.add_parser(
@@ -439,6 +462,85 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "app":
+        from openframetap.video.player_process import ProcessRegistry
+
+        registry = ProcessRegistry(Path("runtime/media-processes.json"))
+        if args.status:
+            item = registry.load().get("app")
+            print(json.dumps({"state": "running" if item else "stopped", "process": item.to_public_dict() if item else None}, indent=2))
+            return 0
+        if args.stop:
+            try:
+                stopped = registry.stop("app", timeout=10.0)
+            except (PermissionError, RuntimeError) as exc:
+                print(f"APP_STOP_FAILED: {exc}")
+                return 1
+            print(json.dumps({"stopped": stopped}, indent=2))
+            return 0
+        if args.control_mode != "disabled":
+            print("APP_FAILED: mock/live control is not enabled until its safety controller is installed")
+            return 4
+        output = args.output or Path("artifacts/private") / f"app-session-{_stamp()}"
+        sanitized_output = args.sanitized_output or Path(
+            str(output).replace("artifacts/private", "artifacts/sanitized")
+        )
+        if args.background:
+            from openframetap.app.runtime import start_background
+
+            child = [
+                "app",
+                "--proposal",
+                str(args.proposal),
+                "--address",
+                args.address,
+                "--duration",
+                str(args.duration),
+                "--output",
+                str(output),
+                "--sanitized-output",
+                str(sanitized_output),
+                "--control-mode",
+                args.control_mode,
+            ]
+            if args.no_ble:
+                child.append("--no-ble")
+            child.append("--quiet")
+            try:
+                payload = start_background(child, output=output)
+            except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+                print(f"APP_START_FAILED: {exc}")
+                return 1
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return 0
+        from openframetap.app.runtime import GtkReadOnlyApp
+        from openframetap.devices.pocket3_livestream import load_fixed_stream_url
+        from openframetap.workflows.pocket3_preview import live_preview_spec
+
+        try:
+            url = load_fixed_stream_url(args.proposal, expected_address=args.address)
+            spec = live_preview_spec(
+                url,
+                source="rtmp",
+                decoder="auto",
+                fullscreen=True,
+                profile="low-latency",
+                sink="gtkwayland",
+            )
+            payload = GtkReadOnlyApp(
+                spec,
+                address=args.address,
+                private_output=output,
+                sanitized_output=sanitized_output,
+                duration_seconds=args.duration,
+                enable_ble=not args.no_ble,
+            ).run()
+        except (OSError, RuntimeError, TimeoutError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"APP_FAILED: {exc}")
+            return 1
+        if not args.quiet:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if payload.get("error") is None and payload.get("fff5_write_count") == 0 else 1
     if args.command == "tools" and args.tools_command == "latency-pattern":
         if not 1 <= args.duration <= 600:
             print("LATENCY_PATTERN_FAILED: --duration must be 1..600 seconds")

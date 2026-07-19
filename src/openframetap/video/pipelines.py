@@ -73,6 +73,17 @@ def _sink_tokens(sink: str, *, fullscreen: bool, sync: str) -> tuple[str, ...]:
             "fps-update-interval=500",
             f"sync={sync}",
         )
+    if sink == "gtkwayland":
+        nested = f"gtkwaylandsink name=video_sink sync={sync}"
+        return (
+            "fpsdisplaysink",
+            "name=app_fps_sink",
+            "text-overlay=false",
+            f"video-sink={nested}",
+            "silent=false",
+            "fps-update-interval=500",
+            f"sync={sync}",
+        )
     raise ValueError(f"unsupported sink: {sink}")
 
 
@@ -93,7 +104,7 @@ def offline_pipeline(
         "h264parse",
         "capsfilter",
         decoder,
-        "fpsdisplaysink" if sink == "fakesink" else "waylandsink",
+        "fpsdisplaysink" if sink == "fakesink" else sink,
     )
     argv = (
         "gst-launch-1.0",
@@ -122,6 +133,7 @@ def offline_pipeline(
         "video/x-h264,stream-format=byte-stream,alignment=au",
         "!",
         decoder,
+        "name=app_decoder" if sink == "gtkwayland" else "name=preview_decoder",
         "!",
         *_sink_tokens(sink, fullscreen=fullscreen, sync=params["sink_sync"]),
     )
@@ -195,6 +207,7 @@ def live_pipeline(
         "video/x-h264,stream-format=byte-stream,alignment=au",
         "!",
         decoder,
+        "name=app_decoder" if sink == "gtkwayland" else "name=preview_decoder",
         "!",
         *_sink_tokens(sink, fullscreen=fullscreen, sync=params["sink_sync"]),
     )

@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import subprocess
 import time
+import re
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -26,6 +27,11 @@ def redact_argv(argv: list[str]) -> list[str]:
             parts = [part for part in parsed.path.split("/") if part]
             path = f"/{parts[0]}/<redacted>" if parts else "/<redacted>"
             value = urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+        value = re.sub(
+            r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])",
+            "<device-address-redacted>",
+            value,
+        )
         rendered.append(prefix + value)
     return rendered
 
@@ -84,11 +90,14 @@ class ProcessRegistry:
             self.path.chmod(0o600)
 
     def register(self, name: str, process: subprocess.Popen, argv: list[str]) -> OwnedProcess:
+        return self.register_pid(name, process.pid, argv)
+
+    def register_pid(self, name: str, pid: int, argv: list[str]) -> OwnedProcess:
         processes = self.load()
         if name in processes:
             raise RuntimeError(f"owned process already running: {name}")
         owned = OwnedProcess(
-            name, process.pid, redact_argv(argv), time.monotonic_ns(), _current_uid()
+            name, pid, redact_argv(argv), time.monotonic_ns(), _current_uid()
         )
         processes[name] = owned
         self.save(processes)

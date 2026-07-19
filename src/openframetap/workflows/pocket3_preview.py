@@ -44,6 +44,7 @@ def live_preview_spec(
     decoder: str = "auto",
     fullscreen: bool = True,
     profile: str = PipelineProfile.LOW_LATENCY.value,
+    sink: str = "wayland",
 ):
     selected_decoder = select_decoder(decoder)
     selected_source = "rtmp" if source == "auto" else source
@@ -51,7 +52,7 @@ def live_preview_spec(
         url,
         source=selected_source,
         decoder=selected_decoder,
-        sink="wayland",
+        sink=sink,
         fullscreen=fullscreen,
         profile=PipelineProfile(profile),
     )

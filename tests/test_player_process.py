@@ -60,3 +60,8 @@ def test_process_registry_never_persists_or_reports_private_rtmp_key(tmp_path: P
     finally:
         if process.poll() is None:
             process.kill()
+
+
+def test_process_registry_redacts_ble_device_address() -> None:
+    rendered = redact_argv(["--address", "E4:7A:2C:36:DC:FC"])
+    assert rendered == ["--address", "<device-address-redacted>"]
