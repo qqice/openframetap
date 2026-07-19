@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import time
 
-from openframetap.app.input import ControlInput
+from openframetap.app.input import ControlInput, JoystickConfig, TouchJoystickInput
 from openframetap.app.runtime import GtkReadOnlyApp, _screenshot_allowed
 from openframetap.app.ble_status import ReadOnlyBleMonitor
 from openframetap.app.state import AppStateSnapshot, StateStore
@@ -27,6 +27,47 @@ def test_live_control_disables_focus_disrupting_screenshot() -> None:
     assert _screenshot_allowed("disabled")
     assert _screenshot_allowed("mock")
     assert not _screenshot_allowed("live")
+
+
+def test_gtk_drag_adapter_restarts_after_end_and_cancel() -> None:
+    class Allocation:
+        width = 270
+        height = 120
+
+    class Widget:
+        def get_allocation(self):
+            return Allocation()
+
+        def queue_draw(self):
+            pass
+
+    class Live:
+        def __init__(self):
+            self.values = []
+
+        def submit(self, value):
+            self.values.append(value)
+
+    app = object.__new__(GtkReadOnlyApp)
+    app.control = None
+    app.live_control = Live()
+    app.input_events = None
+    app.joystick_widget = Widget()
+    app.latest_ui_input = None
+    app.joystick_drag_origin = None
+    app.touch = TouchJoystickInput(JoystickConfig(maximum_output=0.20))
+
+    app._on_joystick_drag_begin(None, 135, 60)
+    app._on_joystick_drag_update(None, 100, 0)
+    assert app.live_control.values[-1].active
+    app._on_joystick_drag_end(None, 100, 0)
+    assert not app.live_control.values[-1].active
+
+    app._on_joystick_drag_begin(None, 135, 60)
+    app._on_joystick_drag_update(None, -100, 0)
+    assert app.live_control.values[-1].active
+    app._on_joystick_drag_cancel(None, None)
+    assert not app.live_control.values[-1].active
 
 
 def test_gtk_pipeline_keeps_mpp_and_never_uses_appsink() -> None:

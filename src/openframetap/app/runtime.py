@@ -129,6 +129,8 @@ class GtkReadOnlyApp:
         self.keyboard = None
         self.touch = None
         self.joystick_widget = None
+        self.joystick_gesture = None
+        self.joystick_drag_origin = None
         self.offset_scale = None
         self.input_events = None
         self.sent_commands = None
@@ -229,6 +231,8 @@ class GtkReadOnlyApp:
             self.joystick_widget.queue_draw()
 
     def _build_window(self, Gtk, Gdk, Gst) -> None:
+        from gi.repository import Pango
+
         tokens = [item for item in self.spec.argv[1:] if item not in {"-e", "-v"}]
         self.pipeline = Gst.parse_launchv(tokens)
         fps_sink = self.pipeline.get_by_name("app_fps_sink")
@@ -267,24 +271,24 @@ class GtkReadOnlyApp:
         if self.control_mode in {"mock", "live"}:
             joystick = Gtk.DrawingArea()
             joystick.set_size_request(270, 120)
-            joystick.set_events(
-                Gdk.EventMask.BUTTON_PRESS_MASK
-                | Gdk.EventMask.BUTTON_RELEASE_MASK
-                | Gdk.EventMask.POINTER_MOTION_MASK
-                | Gdk.EventMask.TOUCH_MASK
-            )
             joystick.connect("draw", self._draw_joystick)
-            joystick.connect("button-press-event", self._on_pointer_down)
-            joystick.connect("motion-notify-event", self._on_pointer_move)
-            joystick.connect("button-release-event", self._on_pointer_up)
-            joystick.connect("touch-event", self._on_touch)
+            gesture = Gtk.GestureDrag.new(joystick)
+            gesture.set_touch_only(False)
+            gesture.connect("drag-begin", self._on_joystick_drag_begin)
+            gesture.connect("drag-update", self._on_joystick_drag_update)
+            gesture.connect("drag-end", self._on_joystick_drag_end)
+            gesture.connect("cancel", self._on_joystick_drag_cancel)
+            self.joystick_gesture = gesture
             self.joystick_widget = joystick
             controls.pack_start(joystick, False, False, 0)
             mode = Gtk.Label(
                 label="MOCK · CONTROL ARMED" if self.control_mode == "mock" else "LIVE · CONNECTING"
             )
             mode.set_name("control-mock" if self.control_mode == "mock" else "control-live")
-            controls.pack_start(mode, False, False, 0)
+            mode.set_size_request(300, -1)
+            mode.set_xalign(0.0)
+            mode.set_ellipsize(Pango.EllipsizeMode.END)
+            controls.pack_start(mode, True, True, 0)
             self.labels["control"] = mode
             if self.control_mode == "live":
                 offset_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -301,7 +305,9 @@ class GtkReadOnlyApp:
                 offset.connect("value-changed", self._on_offset_changed)
                 offset_box.pack_start(offset_label, False, False, 0)
                 offset_box.pack_start(offset, False, False, 0)
-                controls.pack_start(offset_box, False, False, 0)
+                # Anchor tuning controls from the right. Dynamic LIVE status
+                # text may change, but must never move this slider.
+                controls.pack_end(offset_box, False, False, 0)
                 self.offset_scale = offset
                 self.labels["offset"] = offset_label
             stop_button = Gtk.Button(label="STOP  Space")
@@ -427,32 +433,32 @@ class GtkReadOnlyApp:
         finally:
             self.touch.config = original
 
-    def _on_pointer_down(self, _widget, event) -> bool:
-        self._submit_control(self._touch_value("touch_down", "pointer", event.x, event.y))
-        return True
+    def _on_joystick_drag_begin(self, _gesture, start_x: float, start_y: float) -> None:
+        self.joystick_drag_origin = (float(start_x), float(start_y))
+        self._submit_control(
+            self._touch_value("touch_down", "gtk-gesture-drag", start_x, start_y)
+        )
 
-    def _on_pointer_move(self, _widget, event) -> bool:
-        if event.state & self.bindings[1].ModifierType.BUTTON1_MASK:
-            self._submit_control(self._touch_value("touch_move", "pointer", event.x, event.y))
-        return True
+    def _on_joystick_drag_update(self, _gesture, offset_x: float, offset_y: float) -> None:
+        if self.joystick_drag_origin is None:
+            return
+        start_x, start_y = self.joystick_drag_origin
+        self._submit_control(
+            self._touch_value(
+                "touch_move",
+                "gtk-gesture-drag",
+                start_x + float(offset_x),
+                start_y + float(offset_y),
+            )
+        )
 
-    def _on_pointer_up(self, _widget, _event) -> bool:
-        self._submit_control(self.touch.touch_up("pointer"))
-        return True
+    def _on_joystick_drag_end(self, _gesture, _offset_x: float, _offset_y: float) -> None:
+        self.joystick_drag_origin = None
+        self._submit_control(self.touch.touch_up("gtk-gesture-drag"))
 
-    def _on_touch(self, _widget, event) -> bool:
-        Gdk = self.bindings[1]
-        sequence = event.get_event_sequence()
-        if event.type == Gdk.EventType.TOUCH_BEGIN:
-            value = self._touch_value("touch_down", sequence, event.x, event.y)
-        elif event.type == Gdk.EventType.TOUCH_UPDATE:
-            value = self._touch_value("touch_move", sequence, event.x, event.y)
-        elif event.type == Gdk.EventType.TOUCH_END:
-            value = self.touch.touch_up(sequence)
-        else:
-            value = self.touch.touch_cancel(sequence)
-        self._submit_control(value)
-        return True
+    def _on_joystick_drag_cancel(self, *_args) -> None:
+        self.joystick_drag_origin = None
+        self._submit_control(self.touch.touch_cancel("gtk-gesture-drag"))
 
     def _draw_joystick(self, widget, cairo) -> bool:
         allocation = widget.get_allocation()
