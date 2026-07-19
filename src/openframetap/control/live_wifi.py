@@ -84,6 +84,8 @@ class LiveWifiControlSession:
             "center_packets": 0,
             "non_center_packets": 0,
             "max_offset": self._max_offset,
+            "transport_ack_count": 0,
+            "last_ack_sequence": None,
         }
 
     def _set(self, **values) -> None:
@@ -150,6 +152,10 @@ class LiveWifiControlSession:
         async def receive() -> None:
             while transport.is_open:
                 record = await transport.receive_datagram()
+                self._set(
+                    transport_ack_count=getattr(transport, "ack_observed_count", 0),
+                    last_ack_sequence=getattr(transport, "last_ack_sequence", None),
+                )
                 data = record.to_dict()
                 data["kind"] = "udp_received"
                 self.datagram_handler(data)

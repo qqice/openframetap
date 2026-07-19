@@ -267,7 +267,11 @@ class DjiWifiOperatorSequencer:
         self.next_message_counter = (self.next_message_counter + 1) & 0xFF
         return envelope
 
-    def observe_peer_sequence(self, sequence: int) -> None:
+    def observe_peer_sequence(self, sequence: int) -> bool:
         if not 0 <= sequence <= 0xFFFF:
             raise DjiWifiEnvelopeError("peer sequence outside uint16")
+        delta = (sequence - self.peer_sequence) & 0xFFFF
+        if delta == 0 or delta >= 0x8000:
+            return False
         self.peer_sequence = sequence
+        return True

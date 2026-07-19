@@ -57,6 +57,15 @@ def test_operator_sequence_and_message_counter_wrap() -> None:
     assert DjiWifiEnvelope.parse(first.encode()).encode() == first.encode()
 
 
+def test_peer_ack_observation_advances_and_ignores_old_or_duplicate_values() -> None:
+    sequencer = DjiWifiOperatorSequencer(1, 0, 0xFFF0)
+    assert sequencer.observe_peer_sequence(0xFFF8)
+    assert sequencer.observe_peer_sequence(0x0000)
+    assert not sequencer.observe_peer_sequence(0x0000)
+    assert not sequencer.observe_peer_sequence(0xFFF8)
+    assert sequencer.build(b"next").peer_sequence == 0x0000
+
+
 def test_generation_rejects_unreviewed_dynamic_or_reserved_fields() -> None:
     envelope = DjiWifiOperatorSequencer(1, 8, 0).build(b"payload")
     envelope.validate_operator_policy()

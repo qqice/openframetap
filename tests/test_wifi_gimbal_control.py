@@ -19,7 +19,11 @@ from openframetap.control.gimbal_profile import (
     Pocket3StickCommand,
     validate_stick_duml,
 )
-from openframetap.protocol.dji_wifi import DjiWifiOperatorSequencer
+from openframetap.protocol.dji_wifi import (
+    DjiWifiBasicHeader,
+    DjiWifiEnvelope,
+    DjiWifiOperatorSequencer,
+)
 from openframetap.protocol.duml import encode_duml_frame
 from openframetap.transport.dji_wifi_udp import (
     DjiWifiHandshakeProfile,
@@ -148,6 +152,40 @@ def test_transport_accepts_only_structured_command_and_single_writer() -> None:
             await transport.send_stick(b"raw hex", reason="forbidden")  # type: ignore[arg-type]
         gate.set()
         await first
+
+    asyncio.run(scenario())
+
+
+def test_transport_ack_updates_next_operator_envelope_peer_sequence() -> None:
+    async def scenario() -> None:
+        transport = DjiWifiUdpTransport("192.168.2.1")
+        transport.socket = object()
+        transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x82B0, 0x82A8)
+        ack = DjiWifiBasicHeader(
+            total_length=8,
+            format_nibble=8,
+            session_id=0x7055,
+            transport_sequence=0x82B0,
+            wh_type=3,
+            checksum=0,
+            checksum_valid=True,
+        ).encode()
+
+        async def recvfrom(_size):
+            return ack, ("192.168.2.1", 9004)
+
+        sent = []
+
+        async def sendto(data):
+            sent.append(data)
+
+        transport._recvfrom = recvfrom
+        transport._sendto = sendto
+        await transport.receive_datagram()
+        await transport.send_stick(CENTER_STICK_COMMAND, reason="after_ack")
+        assert transport.ack_observed_count == 1
+        assert transport.last_ack_sequence == 0x82B0
+        assert DjiWifiEnvelope.parse(sent[-1]).peer_sequence == 0x82B0
 
     asyncio.run(scenario())
 

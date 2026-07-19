@@ -189,6 +189,8 @@ class DjiWifiUdpTransport:
         self._writer_lock = asyncio.Lock()
         self._owner_task: asyncio.Task | None = None
         self.sent_records: list[dict] = []
+        self.ack_observed_count = 0
+        self.last_ack_sequence: int | None = None
 
     @property
     def is_open(self) -> bool:
@@ -310,6 +312,30 @@ class DjiWifiUdpTransport:
         data, peer = await self._recvfrom(maximum_size)
         if peer != (self.target_ip, self.target_port):
             raise RuntimeError("received a control-session datagram from an unexpected peer")
+        try:
+            basic = DjiWifiBasicHeader.parse(data)
+        except Exception:
+            basic = None
+        if (
+            basic is not None
+            and basic.checksum_valid
+            and basic.format_nibble == DJI_WIFI_FORMAT_NIBBLE
+            and basic.session_id == self.handshake_profile.session_id
+            and basic.wh_type == 0x03
+            and self.sequencer is not None
+            and self.sequencer.observe_peer_sequence(basic.transport_sequence)
+        ):
+            self.ack_observed_count += 1
+            self.last_ack_sequence = basic.transport_sequence
+            self.event_handler(
+                {
+                    "wall_time_utc": _utc_now(),
+                    "monotonic_ns": time.monotonic_ns(),
+                    "kind": "transport_ack_observed",
+                    "ack_sequence": basic.transport_sequence,
+                    "ack_observed_count": self.ack_observed_count,
+                }
+            )
         return UdpReceiveRecord(
             wall_time_utc=_utc_now(),
             monotonic_ns=time.monotonic_ns(),
