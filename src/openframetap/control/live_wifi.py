@@ -17,6 +17,7 @@ from openframetap.control.gimbal_controller import (
     WifiControlPrerequisites,
     WifiGimbalState,
 )
+from openframetap.control.gimbal_profile import Pocket3StickCommand
 from openframetap.protocol.reassembly import DumlStreamReassembler
 from openframetap.transport.dji_wifi_udp import (
     DjiWifiUdpTransport,
@@ -27,6 +28,10 @@ from openframetap.transport.dji_wifi_udp import (
 
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+LIVE_MAXIMUM_INPUT = 0.20
+LIVE_MAX_OFFSET = 32
 
 
 class LiveWifiControlSession:
@@ -196,7 +201,16 @@ class LiveWifiControlSession:
                     await controller.emergency_stop("ble_disconnected")
                     raise RuntimeError("BLE disconnected during live control")
                 stale = not value.monotonic_ns or now - value.monotonic_ns > 250_000_000
-                active = value.active and bool(value.yaw or value.pitch) and not stale
+                quantized = Pocket3StickCommand.from_axes(
+                    yaw_axis=value.yaw / LIVE_MAXIMUM_INPUT,
+                    pitch_axis=value.pitch / LIVE_MAXIMUM_INPUT,
+                    max_offset=LIVE_MAX_OFFSET,
+                )
+                # A curved joystick can emit a tiny non-zero float immediately
+                # outside its deadzone.  If that value rounds to the protocol
+                # center, treat it as released rather than asking the strict
+                # writer to send a non-center command that is actually center.
+                active = value.active and not quantized.is_center and not stale
                 if neutral_required:
                     if not value.active or (value.yaw == 0 and value.pitch == 0):
                         neutral_required = False
@@ -221,7 +235,12 @@ class LiveWifiControlSession:
                     self._set(state="centered", yaw=0.0, pitch=0.0, watchdog="continuous_limit")
                     await asyncio.sleep(0.02)
                     continue
-                await controller.send_live_axes(yaw=value.yaw, pitch=value.pitch)
+                await controller.send_live_axes(
+                    yaw=value.yaw,
+                    pitch=value.pitch,
+                    maximum_input=LIVE_MAXIMUM_INPUT,
+                    max_offset=LIVE_MAX_OFFSET,
+                )
                 self._set(
                     state="active",
                     yaw=value.yaw,

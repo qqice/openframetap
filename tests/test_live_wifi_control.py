@@ -64,6 +64,15 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
     while session.snapshot()["state"] != "armed" and time.monotonic() < deadline:
         time.sleep(0.01)
     assert session.snapshot()["state"] == "armed"
+    # Values just outside the GUI curve's deadzone may be non-zero floats but
+    # still quantize to the protocol center.  They must remain safely armed,
+    # not fault the strict non-center writer.
+    session.submit(
+        ControlInput(yaw=0.001, source="test", monotonic_ns=time.monotonic_ns(), active=True)
+    )
+    time.sleep(0.15)
+    assert session.snapshot()["state"] == "armed"
+    assert not any(not item.is_center for item in FakeTransport.instances[0].commands)
     session.submit(
         ControlInput(yaw=0.20, source="test", monotonic_ns=time.monotonic_ns(), active=True)
     )
