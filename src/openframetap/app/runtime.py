@@ -70,6 +70,12 @@ def _parse_caps(caps: Any) -> tuple[int | None, int | None, str | None]:
     return width, height, caps.to_string()
 
 
+def _screenshot_allowed(control_mode: str) -> bool:
+    """Avoid focus/touch disruption from desktop capture during live control."""
+
+    return control_mode != "live"
+
+
 class GtkReadOnlyApp:
     def __init__(
         self,
@@ -558,10 +564,15 @@ class GtkReadOnlyApp:
                 last_zero_command_monotonic_ns=live.get("last_center_ns"),
             )
             if "control" in self.labels:
+                release_hint = (
+                    " · RELEASE JOYSTICK"
+                    if str(live["watchdog"]) == "continuous_limit"
+                    else ""
+                )
                 self.labels["control"].set_text(
                     f"LIVE · {str(live['state']).upper()}  "
                     f"Y {float(live['yaw']):+.2f}  P {float(live['pitch']):+.2f}  "
-                    f"O {int(live['max_offset'])}"
+                    f"O {int(live['max_offset'])}{release_hint}"
                 )
         bus = self.pipeline.get_bus()
         while message := bus.pop_filtered(Gst.MessageType.ERROR | Gst.MessageType.EOS):
@@ -704,7 +715,10 @@ class GtkReadOnlyApp:
                     self.screenshot["error"] = f"{type(exc).__name__}: {exc}"
                 return False
 
-            GLib.timeout_add_seconds(5, screenshot)
+            if _screenshot_allowed(self.control_mode):
+                GLib.timeout_add_seconds(5, screenshot)
+            else:
+                self.screenshot["skipped_reason"] = "disabled_during_live_control"
             self.loop.run()
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"

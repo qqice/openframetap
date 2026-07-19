@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 
 from openframetap.app.input import ControlInput
-from openframetap.app.runtime import GtkReadOnlyApp
+from openframetap.app.runtime import GtkReadOnlyApp, _screenshot_allowed
 from openframetap.app.ble_status import ReadOnlyBleMonitor
 from openframetap.app.state import AppStateSnapshot, StateStore
 from openframetap.protocol.duml import encode_duml_frame
@@ -21,6 +21,12 @@ def test_ui_state_serialization_and_update_coalescing() -> None:
     assert store.changed_since(revision)[1].battery_percent == 72
     current, _snapshot = store.snapshot()
     assert store.changed_since(current) is None
+
+
+def test_live_control_disables_focus_disrupting_screenshot() -> None:
+    assert _screenshot_allowed("disabled")
+    assert _screenshot_allowed("mock")
+    assert not _screenshot_allowed("live")
 
 
 def test_gtk_pipeline_keeps_mpp_and_never_uses_appsink() -> None:
