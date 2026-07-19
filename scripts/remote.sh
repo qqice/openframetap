@@ -182,6 +182,7 @@ Usage:
   ./scripts/remote.sh media-stop-all
   ./scripts/remote.sh app-start [seconds]
   ./scripts/remote.sh app-start-mock [seconds]
+  ./scripts/remote.sh app-start-live [seconds]
   ./scripts/remote.sh app-status
   ./scripts/remote.sh app-stop
   ./scripts/remote.sh mock-control-test
@@ -245,6 +246,26 @@ printf 'APP_OUTPUT=%s\\n' 'artifacts/private/$stem'"
 cd $REMOTE_DIR
 test -f artifacts/private/approved-live-preview/stream.json
 .venv/bin/python -m openframetap app --background --duration '$seconds' --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem' --control-mode mock
+printf 'APP_OUTPUT=%s\\n' 'artifacts/private/$stem'"
+    ;;
+  app-start-live)
+    seconds="${2:-120}"
+    [[ "$seconds" =~ ^[0-9]+$ ]] && (( seconds >= 1 && seconds <= 120 )) || {
+      echo 'app-start-live seconds must be an integer from 1 to 120' >&2
+      exit 2
+    }
+    run_remote app-live-publisher-check "if ss -Htn state established sport = :1935 | grep -q .; then echo PUBLISHER_PRESENT=1; else echo PUBLISHER_PRESENT=0; fi"
+    publisher_present="$(extract_stem PUBLISHER_PRESENT | tr -d '\r')"
+    if [[ "$publisher_present" != "1" ]]; then
+      "$0" pocket3-rtmp-run-full-stream-session || exit $?
+    fi
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="control-session-$stamp"
+    run_remote app-start-live "set -eu
+cd $REMOTE_DIR
+test -f artifacts/private/approved-live-preview/stream.json
+.venv/bin/python -m openframetap app --background --duration '$seconds' --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem' --control-mode live
 printf 'APP_OUTPUT=%s\\n' 'artifacts/private/$stem'"
     ;;
   app-status)

@@ -92,6 +92,7 @@ class GimbalUdpController:
         self.watchdog_triggered = False
         self.emergency_stop_triggered = False
         self.last_center_ns: int | None = None
+        self.last_send_ns: int | None = None
         self.non_center_started_ns: int | None = None
         self.last_valid_input_ns: int | None = None
         self.fault_reason: str | None = None
@@ -102,6 +103,10 @@ class GimbalUdpController:
     @property
     def watchdog_running(self) -> bool:
         return bool(self._watchdog_task and not self._watchdog_task.done())
+
+    @property
+    def watchdog_expired(self) -> bool:
+        return self._watchdog_expired.is_set()
 
     def _transition(self, target: WifiGimbalState, reason: str) -> None:
         previous = self.state
@@ -130,6 +135,7 @@ class GimbalUdpController:
             self.last_valid_input_ns = self.clock_ns()
             if self.non_center_started_ns is None:
                 self.non_center_started_ns = self.clock_ns()
+        self.last_send_ns = self.clock_ns()
         return record
 
     async def center_burst(
@@ -260,6 +266,35 @@ class GimbalUdpController:
             await self.center_burst(5, reason="input_watchdog_250ms")
             await self.sleep(0.3)
             await self.center_burst(1, reason="watchdog_final_center")
+
+    async def send_live_axes(
+        self,
+        *,
+        yaw: float,
+        pitch: float,
+        maximum_input: float = 0.20,
+        max_offset: int = 32,
+    ) -> None:
+        if self.state not in {WifiGimbalState.ARMED, WifiGimbalState.ACTIVE}:
+            raise RuntimeError(f"live axes require armed state, found {self.state.value}")
+        if not -maximum_input <= yaw <= maximum_input or not -maximum_input <= pitch <= maximum_input:
+            raise ValueError("live input exceeds configured normalized maximum")
+        command = Pocket3StickCommand.from_axes(
+            yaw_axis=yaw / maximum_input,
+            pitch_axis=pitch / maximum_input,
+            max_offset=max_offset,
+        )
+        if command.is_center:
+            raise ValueError("live non-center send received centered input")
+        if self.state != WifiGimbalState.ACTIVE:
+            self._transition(WifiGimbalState.ACTIVE, "live_input_active")
+        await self._send(command, "live_input")
+
+    async def release_live(self, reason: str) -> None:
+        await self.center_burst(5, reason=reason)
+        await self.sleep(0.3)
+        await self.center_burst(1, reason=f"{reason}_final_center")
+        self._transition(WifiGimbalState.ARMED, f"rearmed_after:{reason}")
 
     async def emergency_stop(self, reason: str = "emergency_stop") -> None:
         async with self._operation_lock:

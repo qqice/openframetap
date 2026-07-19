@@ -13,7 +13,7 @@ from typing import Any
 
 from openframetap.app.artifacts import JsonlWriter, write_manifest
 from openframetap.app.ble_status import ReadOnlyBleMonitor
-from openframetap.app.input import JoystickConfig, KeyboardInput, TouchJoystickInput
+from openframetap.app.input import ControlInput, JoystickConfig, KeyboardInput, TouchJoystickInput
 from openframetap.app.state import AppStateSnapshot, StateStore
 from openframetap.control.safety import (
     ControlPrerequisites,
@@ -21,6 +21,7 @@ from openframetap.control.safety import (
     FailClosedController,
     MockCommandSink,
 )
+from openframetap.control.live_wifi import LiveWifiControlSession
 from openframetap.display.session import (
     discover_active_wayland_session,
     gnome_overview_active,
@@ -94,8 +95,8 @@ class GtkReadOnlyApp:
         self.sanitized_output.mkdir(parents=True, exist_ok=True)
         self.duration_seconds = duration_seconds
         self.enable_ble = enable_ble
-        if control_mode not in {"disabled", "mock"}:
-            raise ValueError("GTK runtime accepts only disabled or mock control")
+        if control_mode not in {"disabled", "mock", "live"}:
+            raise ValueError("GTK runtime control mode is invalid")
         self.control_mode = control_mode
         self.registry = ProcessRegistry(registry_path)
         self.state = StateStore()
@@ -117,6 +118,7 @@ class GtkReadOnlyApp:
         self.labels: dict[str, Any] = {}
         self.screenshot = {"attempted": False, "saved": False, "error": None}
         self.control = None
+        self.live_control = None
         self.mock_sink = None
         self.keyboard = None
         self.touch = None
@@ -125,20 +127,29 @@ class GtkReadOnlyApp:
         self.sent_commands = None
         self.control_states = None
         self._mock_records_written = 0
-        if control_mode == "mock":
+        self.latest_ui_input = None
+        if control_mode in {"mock", "live"}:
             joystick = JoystickConfig.load(joystick_config_path)
             self.keyboard = KeyboardInput(maximum_output=joystick.maximum_output)
             self.touch = TouchJoystickInput(joystick)
-            self.mock_sink = MockCommandSink()
             self.input_events = JsonlWriter(self.private_output / "input-events.jsonl")
             self.sent_commands = JsonlWriter(self.private_output / "sent-commands.jsonl")
             self.control_states = JsonlWriter(self.private_output / "control-state.jsonl")
+        if control_mode == "mock":
+            self.mock_sink = MockCommandSink()
             self.control = FailClosedController(
                 self.mock_sink,
                 on_transition=self.control_states.write,
                 live=False,
             )
             self.control.arm(ControlPrerequisites(True, True, True, True, True, True, True))
+        elif control_mode == "live":
+            self.live_control = LiveWifiControlSession(
+                self.state,
+                event_handler=self._event,
+                datagram_handler=self.sent_commands.write,
+                transition_handler=self.control_states.write,
+            )
 
     def _event(self, payload: dict) -> None:
         self.events.write(
@@ -166,6 +177,11 @@ class GtkReadOnlyApp:
                 self._flush_mock_records()
             except Exception as exc:
                 self._event({"kind": "control_stop_error", "error": str(exc)})
+        if self.live_control:
+            try:
+                self.live_control.stop(f"app_exit:{reason}")
+            except Exception as exc:
+                self._event({"kind": "live_control_stop_error", "error": str(exc)})
         if self.loop is not None:
             self.loop.quit()
 
@@ -177,10 +193,18 @@ class GtkReadOnlyApp:
         self._mock_records_written = len(self.mock_sink.records)
 
     def _submit_control(self, value) -> None:
-        if not self.control:
+        if not self.control and not self.live_control:
             return
+        self.latest_ui_input = value
         if self.input_events:
             self.input_events.write(value.to_dict())
+        if self.live_control:
+            self.live_control.submit(value)
+            if value.exit_requested:
+                self._request_stop("keyboard_exit")
+            if self.joystick_widget:
+                self.joystick_widget.queue_draw()
+            return
         if value.emergency_stop:
             import asyncio
 
@@ -227,12 +251,12 @@ class GtkReadOnlyApp:
             self.labels[key] = label
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
-        controls.set_size_request(-1, 136 if self.control_mode == "mock" else 96)
+        controls.set_size_request(-1, 136 if self.control_mode in {"mock", "live"} else 96)
         controls.set_margin_start(24)
         controls.set_margin_end(24)
         controls.set_margin_top(10)
         controls.set_margin_bottom(10)
-        if self.control_mode == "mock":
+        if self.control_mode in {"mock", "live"}:
             joystick = Gtk.DrawingArea()
             joystick.set_size_request(270, 120)
             joystick.set_events(
@@ -248,13 +272,15 @@ class GtkReadOnlyApp:
             joystick.connect("touch-event", self._on_touch)
             self.joystick_widget = joystick
             controls.pack_start(joystick, False, False, 0)
-            mode = Gtk.Label(label="MOCK · CONTROL ARMED")
-            mode.set_name("control-mock")
+            mode = Gtk.Label(
+                label="MOCK · CONTROL ARMED" if self.control_mode == "mock" else "LIVE · CONNECTING"
+            )
+            mode.set_name("control-mock" if self.control_mode == "mock" else "control-live")
             controls.pack_start(mode, False, False, 0)
             self.labels["control"] = mode
             stop_button = Gtk.Button(label="STOP  Space")
             stop_button.set_name("emergency-stop")
-            stop_button.connect("clicked", lambda *_args: self._mock_emergency())
+            stop_button.connect("clicked", lambda *_args: self._control_emergency())
             controls.pack_end(stop_button, False, False, 0)
         else:
             disabled = Gtk.Label(label="JOYSTICK DISABLED · READ-ONLY")
@@ -272,7 +298,7 @@ class GtkReadOnlyApp:
         css.load_from_data(
             b"window { background: #000; color: #fff; } box { background: rgba(0,0,0,0.78); } "
             b"label { color: #fff; font-size: 15px; } #control-disabled { color: #ffcc33; font-size: 20px; } "
-            b"#control-mock { color: #55ddff; font-size: 20px; } #emergency-stop { background: #b00020; color: white; } "
+            b"#control-mock { color: #55ddff; font-size: 20px; } #control-live { color: #66ff88; font-size: 20px; } #emergency-stop { background: #b00020; color: white; } "
             b"button { font-size: 18px; padding: 10px 18px; }"
         )
         Gtk.StyleContext.add_provider_for_screen(
@@ -314,14 +340,34 @@ class GtkReadOnlyApp:
 
             asyncio.run(self.control.focus_lost())
             self._flush_mock_records()
+        elif self.live_control:
+            value = ControlInput(
+                emergency_stop=True,
+                source="window_focus_lost",
+                monotonic_ns=time.monotonic_ns(),
+            )
+            self.latest_ui_input = value
+            self.live_control.submit(value)
         return False
 
-    def _mock_emergency(self) -> None:
+    def _control_emergency(self) -> None:
         if self.control:
             import asyncio
 
             asyncio.run(self.control.emergency_stop("screen_stop"))
             self._flush_mock_records()
+        elif self.live_control:
+            value = ControlInput(
+                emergency_stop=True,
+                source="screen_stop",
+                monotonic_ns=time.monotonic_ns(),
+            )
+            self.latest_ui_input = value
+            self.live_control.submit(value)
+
+    def _mock_emergency(self) -> None:
+        """Compatibility alias retained for existing mock-control tests."""
+        self._control_emergency()
 
     def _local_touch_config(self):
         allocation = self.joystick_widget.get_allocation()
@@ -454,6 +500,40 @@ class GtkReadOnlyApp:
                     f"Y {self.control.latest_input.yaw:+.2f}  "
                     f"P {self.control.latest_input.pitch:+.2f}"
                 )
+        elif self.live_control:
+            # GUI heartbeat keeps a held touch/key valid; motion is still
+            # bounded by the independent 2 s continuous limit.
+            if self.latest_ui_input and self.latest_ui_input.active:
+                value = self.latest_ui_input
+                refreshed = ControlInput(
+                    yaw=value.yaw,
+                    pitch=value.pitch,
+                    source=value.source,
+                    monotonic_ns=now_ns,
+                    active=True,
+                )
+                self.latest_ui_input = refreshed
+                self.live_control.submit(refreshed)
+            live = self.live_control.snapshot()
+            last_age = (
+                (now_ns - live["last_command_ns"]) / 1e6
+                if live.get("last_command_ns") is not None
+                else None
+            )
+            self.state.update(
+                control_state=str(live["state"]).upper(),
+                input_source=(self.latest_ui_input.source if self.latest_ui_input else "none"),
+                yaw=float(live["yaw"]),
+                pitch=float(live["pitch"]),
+                last_command_age_ms=last_age,
+                watchdog_state=str(live["watchdog"]),
+                last_zero_command_monotonic_ns=live.get("last_center_ns"),
+            )
+            if "control" in self.labels:
+                self.labels["control"].set_text(
+                    f"LIVE · {str(live['state']).upper()}  "
+                    f"Y {float(live['yaw']):+.2f}  P {float(live['pitch']):+.2f}"
+                )
         bus = self.pipeline.get_bus()
         while message := bus.pop_filtered(Gst.MessageType.ERROR | Gst.MessageType.EOS):
             if message.type == Gst.MessageType.ERROR:
@@ -534,7 +614,7 @@ class GtkReadOnlyApp:
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "address": self.address,
             "control_mode": self.control_mode,
-            "read_only": True,
+            "read_only": self.control_mode != "live",
             "duration_seconds": self.duration_seconds,
             "pipeline": _redacted_spec(self.spec),
             "display_session": session.to_dict(),
@@ -544,11 +624,17 @@ class GtkReadOnlyApp:
             json.dumps(config, indent=2) + "\n", encoding="utf-8"
         )
         self._event(
-            {"kind": "app_started", "read_only": True, "control_mode": self.control_mode}
+            {
+                "kind": "app_started",
+                "read_only": self.control_mode != "live",
+                "control_mode": self.control_mode,
+            }
         )
         if self.enable_ble:
             self.ble = ReadOnlyBleMonitor(self.address, self.state, event_handler=self._event)
             self.ble.start()
+        if self.live_control:
+            self.live_control.start()
 
         def signal_stop(signum, _frame) -> None:
             GLib.idle_add(self._request_stop, f"signal_{signum}")
@@ -595,6 +681,11 @@ class GtkReadOnlyApp:
             error = f"{type(exc).__name__}: {exc}"
             self._event({"kind": "app_error", "error": error})
         finally:
+            if self.live_control:
+                try:
+                    self.live_control.stop("app_finally")
+                except Exception as exc:
+                    error = error or f"live control cleanup failed: {exc}"
             if self.control and self.control.state not in {
                 ControlState.DISABLED,
                 ControlState.FAULT,
@@ -638,7 +729,7 @@ class GtkReadOnlyApp:
             "actual_duration_seconds": (time.monotonic_ns() - self.started_monotonic_ns) / 1e9,
             "stop_reason": self.stop_reason,
             "error": error,
-            "read_only": True,
+            "read_only": self.control_mode != "live",
             "fff5_write_count": ble_summary["fff5_write_count"],
             "ble": ble_summary,
             "final_state": final.to_dict(),
@@ -670,7 +761,19 @@ class GtkReadOnlyApp:
                     ),
                 }
                 if self.control
-                else None
+                else (
+                    {
+                        **self.live_control.snapshot(),
+                        "mock": False,
+                        "maximum_input": 0.20,
+                        "max_offset": 32,
+                        "rate_hz": 10,
+                        "watchdog_ms": 250,
+                        "continuous_limit_seconds": 2,
+                    }
+                    if self.live_control
+                    else None
+                )
             ),
         }
         if summary["fff5_write_count"] != 0:

@@ -630,9 +630,6 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(json.dumps({"stopped": stopped}, indent=2))
             return 0
-        if args.control_mode == "live":
-            print("APP_FAILED: live control remains disabled until one-shot validation is complete")
-            return 4
         output = args.output or Path("artifacts/private") / f"app-session-{_stamp()}"
         sanitized_output = args.sanitized_output or Path(
             str(output).replace("artifacts/private", "artifacts/sanitized")

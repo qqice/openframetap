@@ -157,6 +157,21 @@ def test_center_test_and_pulse_always_end_at_center() -> None:
     asyncio.run(scenario())
 
 
+def test_live_axes_map_full_ui_output_to_offset32_and_release() -> None:
+    async def scenario() -> None:
+        sink = FakeSink()
+        controller = GimbalUdpController(sink, sleep=no_sleep)
+        await controller.arm(ALL_READY)
+        await controller.send_live_axes(yaw=0.20, pitch=-0.20)
+        assert sink.commands[-1].yaw == 1056
+        assert sink.commands[-1].pitch == 992
+        await controller.release_live("touch_up")
+        assert controller.state == WifiGimbalState.ARMED
+        assert sink.commands[-1].is_center
+
+    asyncio.run(scenario())
+
+
 def test_missing_prerequisite_and_unbounded_pulse_are_refused() -> None:
     async def scenario() -> None:
         controller = GimbalUdpController(FakeSink(), sleep=no_sleep)

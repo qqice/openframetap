@@ -46,6 +46,7 @@ def test_remote_wrapper_exposes_owned_app_lifecycle_only() -> None:
     for action in (
         "app-start",
         "app-start-mock",
+        "app-start-live",
         "app-status",
         "app-stop",
         "pocket3-gimbal-test",

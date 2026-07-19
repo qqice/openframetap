@@ -16,7 +16,7 @@ def test_input_normalization_and_json_configuration() -> None:
     config = JoystickConfig.load(Path("config/control-ui.json"))
     assert config.logical_width == 1280 and config.logical_height == 720
     assert config.deadzone == 0.12
-    assert config.maximum_output == 0.25
+    assert config.maximum_output == 0.20
     with pytest.raises(ValueError):
         ControlInput(yaw=1.01)
 
