@@ -15,6 +15,7 @@ DJI_WIFI_BASIC_HEADER_LENGTH = 8
 DJI_WIFI_FLOW_STATUS_LENGTH = 34
 DJI_WIFI_FORMAT_NIBBLE = 0x8
 DJI_WIFI_DEVICE_STATUS = 0x01
+DJI_WIFI_OPERATOR_STATUS = 0x04
 DJI_WIFI_OPERATOR_COMMAND = 0x05
 DJI_WIFI_HANDSHAKE = 0x00
 DJI_WIFI_TARGET_PORT = 9004
@@ -151,6 +152,46 @@ class DjiWifiFlowStatus:
         if self.range_3.start != self.range_3.end:
             return None
         return self.range_3.end
+
+
+def encode_operator_flow_ack(
+    status: DjiWifiFlowStatus, *, last_sent_sequence: int
+) -> bytes:
+    """Acknowledge processed Pocket windows in Mimo's WhType 04 form."""
+
+    peer_sequence = status.operator_peer_sequence
+    if peer_sequence is None:
+        raise DjiWifiEnvelopeError("cannot acknowledge an ambiguous operator window")
+    if not 0 <= last_sent_sequence <= 0xFFFF:
+        raise DjiWifiEnvelopeError("last sent sequence is outside uint16")
+    outstanding = (last_sent_sequence - peer_sequence) & 0xFFFF
+    if outstanding >= 0x8000 or outstanding % 8:
+        raise DjiWifiEnvelopeError("operator flow acknowledgement has an invalid send window")
+
+    def processed(sequence: int) -> bytes:
+        return sequence.to_bytes(2, "little") * 2 + b"\0" * 4
+
+    header = DjiWifiBasicHeader(
+        total_length=DJI_WIFI_FLOW_STATUS_LENGTH,
+        format_nibble=DJI_WIFI_FORMAT_NIBBLE,
+        session_id=status.basic.session_id,
+        transport_sequence=0,
+        wh_type=DJI_WIFI_OPERATOR_STATUS,
+        checksum=0,
+        checksum_valid=True,
+    ).encode()
+    operator_window = (
+        peer_sequence.to_bytes(2, "little")
+        + last_sent_sequence.to_bytes(2, "little")
+        + b"\0" * 4
+    )
+    return (
+        header
+        + processed(status.range_1.end)
+        + processed(status.range_2.end)
+        + operator_window
+        + b"\0\0"
+    )
 
 
 @dataclass(frozen=True, slots=True)

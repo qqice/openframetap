@@ -55,7 +55,7 @@ def test_gtk_drag_adapter_restarts_after_end_and_cancel() -> None:
     app.joystick_widget = Widget()
     app.latest_ui_input = None
     app.joystick_drag_origin = None
-    app.touch = TouchJoystickInput(JoystickConfig(maximum_output=0.20))
+    app.touch = TouchJoystickInput(JoystickConfig())
 
     app._on_joystick_drag_begin(None, 135, 60)
     app._on_joystick_drag_update(None, 100, 0)

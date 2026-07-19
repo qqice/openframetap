@@ -9,6 +9,7 @@ from openframetap.protocol.dji_wifi import (
     DjiWifiEnvelopeError,
     DjiWifiFlowStatus,
     DjiWifiOperatorSequencer,
+    encode_operator_flow_ack,
 )
 
 
@@ -78,6 +79,26 @@ def test_wh_type_01_rejects_inconsistent_embedded_payload_length() -> None:
     raw[32:34] = (17).to_bytes(2, "little")
     with pytest.raises(DjiWifiEnvelopeError, match="payload length"):
         DjiWifiFlowStatus.parse(raw)
+
+
+def test_operator_flow_ack_collapses_processed_ranges_and_matches_mimo() -> None:
+    status = DjiWifiFlowStatus.parse(
+        bytes.fromhex(
+            "2280557000000186"
+            "a882a88200000000"
+            "a882c88200000000"
+            "d882d88200000000"
+            "0000"
+        )
+    )
+    encoded = encode_operator_flow_ack(status, last_sent_sequence=0x8300)
+    assert encoded.hex() == (
+        "2280557000000483"
+        "a882a88200000000"
+        "c882c88200000000"
+        "d882008300000000"
+        "0000"
+    )
 
 
 def test_operator_sequence_and_message_counter_wrap() -> None:

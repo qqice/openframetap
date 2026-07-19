@@ -24,6 +24,7 @@ from openframetap.protocol.dji_wifi import (
     DjiWifiEnvelope,
     DjiWifiFlowStatus,
     DjiWifiOperatorSequencer,
+    encode_operator_flow_ack,
     DJI_WIFI_FORMAT_NIBBLE,
     DJI_WIFI_HANDSHAKE,
     DJI_WIFI_TARGET_PORT,
@@ -31,6 +32,7 @@ from openframetap.protocol.dji_wifi import (
 
 
 DEFAULT_LOCAL_PORT = 54232
+FLOW_ACK_INTERVAL_NS = 25_000_000
 CAPTURED_SESSION_ID = 0x7055
 CAPTURED_SEQUENCE_SEED = 0x82A8
 
@@ -202,6 +204,7 @@ class DjiWifiUdpTransport:
         handshake_profile: DjiWifiHandshakeProfile | None = None,
         socket_factory: Callable[..., socket.socket] = socket.socket,
         event_handler: Callable[[dict], None] | None = None,
+        clock_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         self.target_ip = validate_pocket_target_ip(target_ip)
         if target_port != DJI_WIFI_TARGET_PORT:
@@ -213,6 +216,7 @@ class DjiWifiUdpTransport:
         self.handshake_profile = handshake_profile or DjiWifiHandshakeProfile.fresh()
         self.socket_factory = socket_factory
         self.event_handler = event_handler or (lambda event: None)
+        self.clock_ns = clock_ns
         self.socket: socket.socket | None = None
         self.sequencer: DjiWifiOperatorSequencer | None = None
         self.duml_sequence = 0
@@ -224,6 +228,9 @@ class DjiWifiUdpTransport:
         self.response_packet_count = 0
         self.last_response_sequence: int | None = None
         self.ambiguous_window_count = 0
+        self.latest_flow_status: DjiWifiFlowStatus | None = None
+        self.flow_ack_sent_count = 0
+        self.last_flow_ack_ns: int | None = None
         self.keepalive_sent_count = 0
         self.keepalive_response_count = 0
         self.last_keepalive_response_ns: int | None = None
@@ -385,6 +392,46 @@ class DjiWifiUdpTransport:
             finally:
                 self._owner_task = None
 
+    async def send_flow_ack_if_due(self) -> dict | None:
+        """Send Mimo-shaped WhType 04 flow state at no more than 40 Hz."""
+
+        status = self.latest_flow_status
+        if status is None:
+            return None
+        if self.socket is None or self.sequencer is None:
+            raise RuntimeError("UDP control transport is not open and handshaken")
+        now = self.clock_ns()
+        if self.last_flow_ack_ns is not None and now - self.last_flow_ack_ns < FLOW_ACK_INTERVAL_NS:
+            return None
+        task = asyncio.current_task()
+        if self._owner_task is not None and self._owner_task is not task:
+            raise RuntimeError("single-writer violation")
+        async with self._writer_lock:
+            self._owner_task = task
+            try:
+                datagram = encode_operator_flow_ack(
+                    status, last_sent_sequence=self.last_sent_transport_sequence
+                )
+                await self._sendto(datagram)
+                self.last_flow_ack_ns = now
+                self.flow_ack_sent_count += 1
+                record = {
+                    "wall_time_utc": _utc_now(),
+                    "monotonic_ns": now,
+                    "kind": "transport_flow_ack",
+                    "flow_ack_sent_count": self.flow_ack_sent_count,
+                    "processed_range_1": status.range_1.end,
+                    "processed_range_2": status.range_2.end,
+                    "operator_window_start": status.range_3.end,
+                    "operator_window_end": self.last_sent_transport_sequence,
+                    "data_hex": datagram.hex(),
+                }
+                self.sent_records.append(record)
+                self.event_handler(record)
+                return record
+            finally:
+                self._owner_task = None
+
     async def receive_datagram(self, *, maximum_size: int = 65535) -> UdpReceiveRecord:
         """Receive only from the already validated Pocket peer.
 
@@ -429,6 +476,7 @@ class DjiWifiUdpTransport:
             except Exception:
                 status = None
             if status is not None:
+                self.latest_flow_status = status
                 peer_sequence = status.operator_peer_sequence
                 if peer_sequence is None:
                     self.ambiguous_window_count += 1
@@ -490,3 +538,4 @@ class DjiWifiUdpTransport:
             self.socket.close()
             self.socket = None
         self.sequencer = None
+        self.latest_flow_status = None

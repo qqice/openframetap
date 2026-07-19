@@ -11,6 +11,8 @@ from typing import Awaitable, Callable, Protocol
 from openframetap.control.gimbal_profile import (
     CENTER_STICK_COMMAND,
     INITIAL_TEST_MAX_OFFSET,
+    LIVE_PROTOTYPE_MAX_OFFSET,
+    LIVE_PROTOTYPE_MIN_OFFSET,
     Pocket3StickCommand,
 )
 
@@ -272,17 +274,16 @@ class GimbalUdpController:
         *,
         yaw: float,
         pitch: float,
-        maximum_input: float = 0.20,
-        max_offset: int = 32,
+        minimum_offset: int = LIVE_PROTOTYPE_MIN_OFFSET,
+        maximum_offset: int = LIVE_PROTOTYPE_MAX_OFFSET,
     ) -> None:
         if self.state not in {WifiGimbalState.ARMED, WifiGimbalState.ACTIVE}:
             raise RuntimeError(f"live axes require armed state, found {self.state.value}")
-        if not -maximum_input <= yaw <= maximum_input or not -maximum_input <= pitch <= maximum_input:
-            raise ValueError("live input exceeds configured normalized maximum")
-        command = Pocket3StickCommand.from_axes(
-            yaw_axis=yaw / maximum_input,
-            pitch_axis=pitch / maximum_input,
-            max_offset=max_offset,
+        command = Pocket3StickCommand.from_radial_axes(
+            yaw_axis=yaw,
+            pitch_axis=pitch,
+            minimum_offset=minimum_offset,
+            maximum_offset=maximum_offset,
         )
         if command.is_center:
             raise ValueError("live non-center send received centered input")

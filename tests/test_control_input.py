@@ -16,12 +16,9 @@ def test_input_normalization_and_json_configuration() -> None:
     config = JoystickConfig.load(Path("config/control-ui.json"))
     assert config.logical_width == 1280 and config.logical_height == 720
     assert config.deadzone == 0.12
-    assert config.maximum_output == 0.20
-    assert (config.live_offset_min, config.live_offset_default, config.live_offset_max) == (
-        16,
-        96,
-        188,
-    )
+    assert config.overlay_size == 340
+    assert config.keyboard_output == 0.41
+    assert (config.protocol_offset_min, config.protocol_offset_max) == (32, 188)
     with pytest.raises(ValueError):
         ControlInput(yaw=1.01)
 
@@ -30,13 +27,14 @@ def test_touch_coordinate_mapping_deadzone_curve_and_limit() -> None:
     config = JoystickConfig()
     assert map_touch_axes(config.center_x, config.center_y, config) == (0.0, 0.0)
     yaw, pitch = map_touch_axes(config.center_x + config.radius * 0.5, config.center_y, config)
-    assert 0 < yaw < config.maximum_output and pitch == pytest.approx(0.0)
+    assert yaw == pytest.approx((0.5 - config.deadzone) / (1 - config.deadzone))
+    assert pitch == pytest.approx(0.0)
     yaw, pitch = map_touch_axes(
         config.center_x + config.radius * 10,
         config.center_y - config.radius * 10,
         config,
     )
-    assert (yaw**2 + pitch**2) ** 0.5 == pytest.approx(config.maximum_output)
+    assert (yaw**2 + pitch**2) ** 0.5 == pytest.approx(1.0)
     assert yaw > 0 and pitch > 0
 
 

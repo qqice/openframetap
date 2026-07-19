@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -130,8 +131,8 @@ class GtkReadOnlyApp:
         self.touch = None
         self.joystick_widget = None
         self.joystick_gesture = None
+        self.joystick_popover = None
         self.joystick_drag_origin = None
-        self.offset_scale = None
         self.input_events = None
         self.sent_commands = None
         self.control_states = None
@@ -139,7 +140,7 @@ class GtkReadOnlyApp:
         self.latest_ui_input = None
         if control_mode in {"mock", "live"}:
             joystick = JoystickConfig.load(joystick_config_path)
-            self.keyboard = KeyboardInput(maximum_output=joystick.maximum_output)
+            self.keyboard = KeyboardInput(maximum_output=joystick.keyboard_output)
             self.touch = TouchJoystickInput(joystick)
             self.input_events = JsonlWriter(self.private_output / "input-events.jsonl")
             self.sent_commands = JsonlWriter(self.private_output / "sent-commands.jsonl")
@@ -158,7 +159,8 @@ class GtkReadOnlyApp:
                 event_handler=self._event,
                 datagram_handler=self.sent_commands.write,
                 transition_handler=self.control_states.write,
-                initial_max_offset=joystick.live_offset_default,
+                minimum_offset=joystick.protocol_offset_min,
+                maximum_offset=joystick.protocol_offset_max,
             )
 
     def _event(self, payload: dict) -> None:
@@ -253,24 +255,34 @@ class GtkReadOnlyApp:
         window.connect("delete-event", lambda *_args: (self._request_stop("window_close"), True)[1])
         window.connect("focus-out-event", self._on_focus_lost)
 
+        widget.set_hexpand(True)
+        widget.set_vexpand(True)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        header.set_name("status-bar")
         header.set_size_request(-1, 54)
         for key in ("device", "ble", "pairing", "rtmp", "media", "video", "battery", "rock", "age"):
             label = Gtk.Label(label=key)
             label.set_xalign(0.0)
             header.pack_start(label, key in {"device", "media"}, key in {"device", "media"}, 8)
             self.labels[key] = label
+        root.pack_start(header, False, False, 0)
+        root.pack_start(widget, True, True, 0)
 
-        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
-        controls.set_size_request(-1, 136 if self.control_mode in {"mock", "live"} else 96)
-        controls.set_margin_start(24)
-        controls.set_margin_end(24)
-        controls.set_margin_top(10)
-        controls.set_margin_bottom(10)
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        controls.set_name("button-bar")
+        controls.set_size_request(-1, 72)
+        controls.set_margin_start(18)
+        controls.set_margin_end(18)
+        controls.set_margin_top(8)
+        controls.set_margin_bottom(8)
         if self.control_mode in {"mock", "live"}:
             joystick = Gtk.DrawingArea()
-            joystick.set_size_request(270, 120)
+            joystick.set_size_request(
+                self.touch.config.overlay_size,
+                self.touch.config.overlay_size,
+            )
             joystick.connect("draw", self._draw_joystick)
             gesture = Gtk.GestureDrag.new(joystick)
             gesture.set_touch_only(False)
@@ -280,36 +292,32 @@ class GtkReadOnlyApp:
             gesture.connect("cancel", self._on_joystick_drag_cancel)
             self.joystick_gesture = gesture
             self.joystick_widget = joystick
-            controls.pack_start(joystick, False, False, 0)
+            popover = Gtk.Popover.new(widget)
+            popover.set_name("joystick-popover")
+            popover.set_modal(False)
+            popover.set_transitions_enabled(False)
+            popover.set_position(Gtk.PositionType.TOP)
+            popover.add(joystick)
+            self.joystick_popover = popover
+
+            def place_joystick(_widget, allocation) -> None:
+                rectangle = Gdk.Rectangle()
+                rectangle.x = 18 + self.touch.config.overlay_size // 2
+                rectangle.y = max(1, allocation.height - 4)
+                rectangle.width = 1
+                rectangle.height = 1
+                popover.set_pointing_to(rectangle)
+
+            widget.connect("size-allocate", place_joystick)
             mode = Gtk.Label(
                 label="MOCK · CONTROL ARMED" if self.control_mode == "mock" else "LIVE · CONNECTING"
             )
             mode.set_name("control-mock" if self.control_mode == "mock" else "control-live")
-            mode.set_size_request(300, -1)
+            mode.set_size_request(360, 48)
             mode.set_xalign(0.0)
             mode.set_ellipsize(Pango.EllipsizeMode.END)
             controls.pack_start(mode, True, True, 0)
             self.labels["control"] = mode
-            if self.control_mode == "live":
-                offset_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-                offset_label = Gtk.Label(label=f"OFFSET {self.touch.config.live_offset_default}")
-                offset = Gtk.Scale.new_with_range(
-                    Gtk.Orientation.HORIZONTAL,
-                    self.touch.config.live_offset_min,
-                    self.touch.config.live_offset_max,
-                    1,
-                )
-                offset.set_value(self.touch.config.live_offset_default)
-                offset.set_digits(0)
-                offset.set_size_request(230, -1)
-                offset.connect("value-changed", self._on_offset_changed)
-                offset_box.pack_start(offset_label, False, False, 0)
-                offset_box.pack_start(offset, False, False, 0)
-                # Anchor tuning controls from the right. Dynamic LIVE status
-                # text may change, but must never move this slider.
-                controls.pack_end(offset_box, False, False, 0)
-                self.offset_scale = offset
-                self.labels["offset"] = offset_label
             stop_button = Gtk.Button(label="STOP  Space")
             stop_button.set_name("emergency-stop")
             stop_button.connect("clicked", lambda *_args: self._control_emergency())
@@ -317,19 +325,19 @@ class GtkReadOnlyApp:
         else:
             disabled = Gtk.Label(label="JOYSTICK DISABLED · READ-ONLY")
             disabled.set_name("control-disabled")
-            controls.pack_start(disabled, False, False, 0)
+            controls.pack_start(disabled, True, True, 0)
         exit_button = Gtk.Button(label="退出  Esc / Q")
         exit_button.connect("clicked", lambda *_args: self._request_stop("exit_button"))
         controls.pack_end(exit_button, False, False, 0)
-        root.pack_start(header, False, False, 0)
-        root.pack_start(widget, True, True, 0)
         root.pack_start(controls, False, False, 0)
         window.add(root)
 
         css = Gtk.CssProvider()
         css.load_from_data(
-            b"window { background: #000; color: #fff; } box { background: rgba(0,0,0,0.78); } "
+            b"window { background: #000; color: #fff; } #status-bar, #button-bar { background: rgba(0,0,0,0.78); } "
+            b"#joystick-popover { background: rgba(0,0,0,0.10); border: 0; box-shadow: none; padding: 0; } "
             b"label { color: #fff; font-size: 15px; } #control-disabled { color: #ffcc33; font-size: 20px; } "
+            b"#control-mock, #control-live { background: rgba(0,0,0,0.58); border-radius: 8px; } "
             b"#control-mock { color: #55ddff; font-size: 20px; } #control-live { color: #66ff88; font-size: 20px; } #emergency-stop { background: #b00020; color: white; } "
             b"button { font-size: 18px; padding: 10px 18px; }"
         )
@@ -397,14 +405,6 @@ class GtkReadOnlyApp:
             self.latest_ui_input = value
             self.live_control.submit(value)
 
-    def _on_offset_changed(self, scale) -> None:
-        if not self.live_control:
-            return
-        value = int(round(scale.get_value()))
-        self.live_control.set_max_offset(value)
-        if "offset" in self.labels:
-            self.labels["offset"].set_text(f"OFFSET {value}")
-
     def _mock_emergency(self) -> None:
         """Compatibility alias retained for existing mock-control tests."""
         self._control_emergency()
@@ -412,15 +412,13 @@ class GtkReadOnlyApp:
     def _local_touch_config(self):
         allocation = self.joystick_widget.get_allocation()
         base = self.touch.config
-        return type(base)(
+        return replace(
+            base,
             logical_width=allocation.width,
             logical_height=allocation.height,
             center_x=allocation.width / 2,
             center_y=allocation.height / 2,
             radius=min(allocation.width, allocation.height) * 0.42,
-            deadzone=base.deadzone,
-            maximum_output=base.maximum_output,
-            cubic_blend=base.cubic_blend,
         )
 
     def _touch_value(self, action: str, touch_id, x: float = 0, y: float = 0):
@@ -464,16 +462,23 @@ class GtkReadOnlyApp:
         allocation = widget.get_allocation()
         cx, cy = allocation.width / 2, allocation.height / 2
         radius = min(allocation.width, allocation.height) * 0.42
+        cairo.set_source_rgba(0.0, 0.0, 0.0, 0.22)
+        cairo.arc(cx, cy, radius, 0, 6.28319)
+        cairo.fill()
         cairo.set_source_rgba(0.2, 0.7, 0.9, 0.35)
         cairo.set_line_width(3)
         cairo.arc(cx, cy, radius, 0, 6.28319)
         cairo.stroke()
+        if self.touch:
+            cairo.set_source_rgba(0.7, 0.9, 1.0, 0.24)
+            cairo.set_line_width(2)
+            cairo.arc(cx, cy, radius * self.touch.config.deadzone, 0, 6.28319)
+            cairo.stroke()
         value = self.touch.current() if self.touch else None
-        scale = radius / max(self.touch.config.maximum_output, 0.001) if self.touch else 0
-        x = cx + (value.yaw * scale if value else 0)
-        y = cy - (value.pitch * scale if value else 0)
+        x = cx + (value.yaw * radius if value else 0)
+        y = cy - (value.pitch * radius if value else 0)
         cairo.set_source_rgba(0.2, 0.8, 1.0, 0.9)
-        cairo.arc(x, y, 18, 0, 6.28319)
+        cairo.arc(x, y, 28, 0, 6.28319)
         cairo.fill()
         return False
 
@@ -541,8 +546,9 @@ class GtkReadOnlyApp:
                     f"P {self.control.latest_input.pitch:+.2f}"
                 )
         elif self.live_control:
-            # GUI heartbeat keeps a held touch/key valid; motion is still
-            # bounded by the independent 2 s continuous limit.
+            # GUI heartbeat keeps a held touch/key valid. Release, focus loss,
+            # STOP, disconnect and a missing heartbeat still center through
+            # the independent watchdog; there is no arbitrary hold timer.
             if self.latest_ui_input and self.latest_ui_input.active:
                 value = self.latest_ui_input
                 refreshed = ControlInput(
@@ -570,15 +576,10 @@ class GtkReadOnlyApp:
                 last_zero_command_monotonic_ns=live.get("last_center_ns"),
             )
             if "control" in self.labels:
-                release_hint = (
-                    " · RELEASE JOYSTICK"
-                    if str(live["watchdog"]) == "continuous_limit"
-                    else ""
-                )
                 self.labels["control"].set_text(
                     f"LIVE · {str(live['state']).upper()}  "
                     f"Y {float(live['yaw']):+.2f}  P {float(live['pitch']):+.2f}  "
-                    f"O {int(live['max_offset'])}{release_hint}"
+                    f"SPEED {int(live['current_protocol_offset'])}"
                 )
         bus = self.pipeline.get_bus()
         while message := bus.pop_filtered(Gst.MessageType.ERROR | Gst.MessageType.EOS):
@@ -665,6 +666,7 @@ class GtkReadOnlyApp:
             "pipeline": _redacted_spec(self.spec),
             "display_session": session.to_dict(),
             "owned_pid": registry_item.to_public_dict(),
+            "joystick": self.touch.config.to_dict() if self.touch else None,
         }
         (self.private_output / "app-config.json").write_text(
             json.dumps(config, indent=2) + "\n", encoding="utf-8"
@@ -696,6 +698,9 @@ class GtkReadOnlyApp:
                 set_gnome_overview_active(False, env)
                 overview_hidden = True
             self.window.show_all()
+            if self.joystick_popover is not None:
+                self.joystick_popover.show_all()
+                self.joystick_popover.popup()
             result = self.pipeline.set_state(Gst.State.PLAYING)
             if result == Gst.StateChangeReturn.FAILURE:
                 raise RuntimeError("GTK app pipeline failed to enter PLAYING")
@@ -814,11 +819,12 @@ class GtkReadOnlyApp:
                     {
                         **self.live_control.snapshot(),
                         "mock": False,
-                        "maximum_input": 0.20,
+                        "input_geometry": "unit_circle",
+                        "speed_mapping": "linear_radial_32_to_188",
                         "rate_hz": 10,
                         "watchdog_ms": 250,
                         "control_keepalive_timeout_ms": 2500,
-                        "continuous_limit_seconds": 2,
+                        "continuous_limit_enabled": False,
                     }
                     if self.live_control
                     else None

@@ -110,6 +110,31 @@ unequal pair is logged and ignored rather than assigning an unverified range
 semantic. WhType `03` remains recorded as individual response provenance and
 is no longer used as cumulative acknowledgement state.
 
+### Operator WhType 04 flow acknowledgement
+
+【实机事实】After the range-3 fix, the owner could repeatedly control the gimbal.
+The 122.927-second evidence session kept the outbound receipt gap at one step,
+but Pocket's WhType `01` range 2 grew from `56360` to `57160`: exactly 100
+eight-byte response steps. Pocket then stopped returning `04/50`; 49 of 51
+keepalives received a response and the old timeout correctly centered control.
+This separates the fixed operator-command receipt bug from a second long-lived
+response-window exhaustion.
+
+【统计观察】Mimo emitted 2,944 WhType `04` status packets with a median interval
+of 22.825 ms. In the dominant structure it collapses WhType `01` ranges 1 and
+2 to their processed end values, then reports range 3 from Pocket's cumulative
+operator receipt value through the latest locally sent WhType `05` sequence.
+For example, an incoming range-2 value `33448..33480`, range-3 receipt `33496`,
+and latest send `33536` produces block 2 `33480..33480` and block 3
+`33496..33536`; the reconstructed 34 bytes match the Mimo packet exactly.
+
+【捕获推断】Range 2 is Pocket's pending response window, and failing to collapse
+it in an operator WhType `04` packet exhausts a 100-packet queue. OpenFrameTap
+now generates only this exact structured status form at no more than 40 Hz.
+It is emitted by the same serialized transport writer as commands; no UI or
+input callback can send it directly. This long-session correction remains to
+be confirmed by the next live hardware run.
+
 ## Command boundary
 
 The only outbound DUML command families allowed by the current Wi-Fi control

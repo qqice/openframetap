@@ -93,6 +93,18 @@ def test_fixed_fields_roll_ranges_and_axes_fail_closed() -> None:
         Pocket3StickCommand.from_axes(yaw_axis=1, pitch_axis=0, max_offset=189)
 
 
+def test_live_radial_speed_maps_linearly_from_32_to_188() -> None:
+    minimum = Pocket3StickCommand.from_radial_axes(yaw_axis=0.0001, pitch_axis=0)
+    halfway = Pocket3StickCommand.from_radial_axes(yaw_axis=0.5, pitch_axis=0)
+    maximum = Pocket3StickCommand.from_radial_axes(yaw_axis=1.0, pitch_axis=0)
+    diagonal = Pocket3StickCommand.from_radial_axes(yaw_axis=1.0, pitch_axis=1.0)
+    assert minimum.yaw == 1024 + 32
+    assert halfway.yaw == 1024 + 110
+    assert maximum.yaw == 1024 + 188
+    assert diagonal.yaw == diagonal.pitch == 1024 + 133
+    assert Pocket3StickCommand.from_radial_axes(yaw_axis=0, pitch_axis=0).is_center
+
+
 def test_04_50_and_unknown_commands_are_rejected() -> None:
     forbidden = encode_duml_frame(
         sender=2, receiver=4, sequence=1, flags=0, cmd_set=4, cmd_id=0x50,
@@ -289,6 +301,52 @@ def test_wh_type_01_ambiguous_third_range_does_not_advance_peer_sequence() -> No
     asyncio.run(scenario())
 
 
+def test_transport_rate_limits_exact_wh_type_04_flow_ack() -> None:
+    async def scenario() -> None:
+        now = [100_000_000]
+        transport = DjiWifiUdpTransport(
+            "192.168.2.1",
+            handshake_profile=DjiWifiHandshakeProfile(),
+            clock_ns=lambda: now[0],
+        )
+        transport.socket = object()
+        transport.sequencer = DjiWifiOperatorSequencer(0x7055, 0x8308, 0x82A8)
+        transport.last_sent_transport_sequence = 0x8300
+        incoming = bytes.fromhex(
+            "2280557000000186"
+            "a882a88200000000"
+            "a882c88200000000"
+            "d882d88200000000"
+            "0000"
+        )
+        sent = []
+
+        async def recvfrom(_size):
+            return incoming, ("192.168.2.1", 9004)
+
+        async def sendto(data):
+            sent.append(data)
+
+        transport._recvfrom = recvfrom
+        transport._sendto = sendto
+        await transport.receive_datagram()
+        first = await transport.send_flow_ack_if_due()
+        assert first is not None
+        assert await transport.send_flow_ack_if_due() is None
+        now[0] += 25_000_000
+        assert await transport.send_flow_ack_if_due() is not None
+        assert len(sent) == 2
+        assert sent[0].hex() == (
+            "2280557000000483"
+            "a882a88200000000"
+            "c882c88200000000"
+            "d882008300000000"
+            "0000"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_transport_matches_control_keepalive_response_by_duml_sequence() -> None:
     async def scenario() -> None:
         transport = DjiWifiUdpTransport(
@@ -376,14 +434,14 @@ def test_center_test_and_pulse_always_end_at_center() -> None:
     asyncio.run(scenario())
 
 
-def test_live_axes_map_full_ui_output_to_offset32_and_release() -> None:
+def test_live_axes_map_full_radial_output_to_188_and_release() -> None:
     async def scenario() -> None:
         sink = FakeSink()
         controller = GimbalUdpController(sink, sleep=no_sleep)
         await controller.arm(ALL_READY)
-        await controller.send_live_axes(yaw=0.20, pitch=-0.20)
-        assert sink.commands[-1].yaw == 1056
-        assert sink.commands[-1].pitch == 992
+        await controller.send_live_axes(yaw=1.0, pitch=0.0)
+        assert sink.commands[-1].yaw == 1212
+        assert sink.commands[-1].pitch == 1024
         await controller.release_live("touch_up")
         assert controller.state == WifiGimbalState.ARMED
         assert sink.commands[-1].is_center

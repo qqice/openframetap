@@ -35,27 +35,24 @@ class JoystickConfig:
     logical_height: int = 720
     center_x: float = 150.0
     center_y: float = 570.0
-    radius: float = 110.0
+    radius: float = 150.0
     deadzone: float = 0.12
-    maximum_output: float = 0.25
-    cubic_blend: float = 0.65
-    live_offset_min: int = 16
-    live_offset_default: int = 96
-    live_offset_max: int = 188
+    overlay_size: int = 340
+    keyboard_output: float = 0.41
+    protocol_offset_min: int = 32
+    protocol_offset_max: int = 188
 
     def __post_init__(self) -> None:
         if self.logical_width <= 0 or self.logical_height <= 0 or self.radius <= 0:
             raise ValueError("joystick geometry must be positive")
         if not 0 <= self.deadzone < 1:
             raise ValueError("joystick deadzone must be 0..1")
-        if not 0 < self.maximum_output <= 1:
-            raise ValueError("maximum output must be 0..1")
-        if not 0 <= self.cubic_blend <= 1:
-            raise ValueError("cubic blend must be 0..1")
-        if not 1 <= self.live_offset_min <= self.live_offset_default <= self.live_offset_max:
-            raise ValueError("live offset bounds must satisfy 1 <= min <= default <= max")
-        if self.live_offset_max > 188:
-            raise ValueError("live offset exceeds the symmetric Mimo-captured envelope")
+        if self.overlay_size < 200:
+            raise ValueError("joystick overlay must be at least 200 logical pixels")
+        if not 0 < self.keyboard_output <= 1:
+            raise ValueError("keyboard output must be within 0..1")
+        if not 1 <= self.protocol_offset_min < self.protocol_offset_max <= 188:
+            raise ValueError("protocol offset range must satisfy 1 <= min < max <= 188")
 
     @classmethod
     def load(cls, path: Path) -> "JoystickConfig":
@@ -70,10 +67,6 @@ class InputSource(Protocol):
     def current(self) -> ControlInput: ...
 
 
-def _curve(value: float, blend: float) -> float:
-    return (1.0 - blend) * value + blend * value**3
-
-
 def map_touch_axes(x: float, y: float, config: JoystickConfig) -> tuple[float, float]:
     dx = (x - config.center_x) / config.radius
     dy = (config.center_y - y) / config.radius
@@ -86,8 +79,10 @@ def map_touch_axes(x: float, y: float, config: JoystickConfig) -> tuple[float, f
         magnitude = 1.0
     direction_x, direction_y = dx / magnitude, dy / magnitude
     normalized = (magnitude - config.deadzone) / (1.0 - config.deadzone)
-    output = _curve(normalized, config.cubic_blend) * config.maximum_output
-    return direction_x * output, direction_y * output
+    # Radial displacement is the speed demand.  Protocol minimum/maximum
+    # scaling is performed later by the Pocket 3 profile so the input layer
+    # stays transport-independent.
+    return direction_x * normalized, direction_y * normalized
 
 
 class KeyboardInput:

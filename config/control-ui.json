@@ -4,12 +4,11 @@
     "logical_height": 720,
     "center_x": 150.0,
     "center_y": 570.0,
-    "radius": 110.0,
+    "radius": 150.0,
     "deadzone": 0.12,
-    "maximum_output": 0.20,
-    "cubic_blend": 0.65,
-    "live_offset_min": 16,
-    "live_offset_default": 96,
-    "live_offset_max": 188
+    "overlay_size": 340,
+    "keyboard_output": 0.41,
+    "protocol_offset_min": 32,
+    "protocol_offset_max": 188
   }
 }

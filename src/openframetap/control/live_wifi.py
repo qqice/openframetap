@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
+import math
 from datetime import datetime, timezone
 import queue
 import threading
@@ -18,7 +19,6 @@ from openframetap.control.gimbal_controller import (
     WifiGimbalState,
 )
 from openframetap.control.gimbal_profile import (
-    LIVE_PROTOTYPE_DEFAULT_OFFSET,
     LIVE_PROTOTYPE_MAX_OFFSET,
     LIVE_PROTOTYPE_MIN_OFFSET,
     Pocket3StickCommand,
@@ -35,14 +35,6 @@ def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-LIVE_MAXIMUM_INPUT = 0.20
-
-
-@dataclass(frozen=True, slots=True)
-class LiveOffsetUpdate:
-    max_offset: int
-
-
 class LiveWifiControlSession:
     """Own the only UDP writer while GUI callbacks only enqueue input."""
 
@@ -54,22 +46,24 @@ class LiveWifiControlSession:
         datagram_handler: Callable[[dict], None] | None = None,
         transition_handler: Callable[[dict], None] | None = None,
         transport_factory: Callable = DjiWifiUdpTransport,
-        initial_max_offset: int = LIVE_PROTOTYPE_DEFAULT_OFFSET,
+        minimum_offset: int = LIVE_PROTOTYPE_MIN_OFFSET,
+        maximum_offset: int = LIVE_PROTOTYPE_MAX_OFFSET,
     ) -> None:
-        if not LIVE_PROTOTYPE_MIN_OFFSET <= initial_max_offset <= LIVE_PROTOTYPE_MAX_OFFSET:
-            raise ValueError("initial live offset is outside the captured safe envelope")
+        if not 1 <= minimum_offset < maximum_offset <= LIVE_PROTOTYPE_MAX_OFFSET:
+            raise ValueError("live radial offset range is outside the captured envelope")
         self.state = state
         self.event_handler = event_handler or (lambda event: None)
         self.datagram_handler = datagram_handler or (lambda event: None)
         self.transition_handler = transition_handler or (lambda event: None)
         self.transport_factory = transport_factory
-        self._inputs: queue.SimpleQueue[ControlInput | LiveOffsetUpdate] = queue.SimpleQueue()
+        self._inputs: queue.SimpleQueue[ControlInput] = queue.SimpleQueue()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._done = threading.Event()
         self._latest = ControlInput(source="live")
-        self._max_offset = int(initial_max_offset)
+        self._minimum_offset = int(minimum_offset)
+        self._maximum_offset = int(maximum_offset)
         self._snapshot_lock = threading.Lock()
         self._snapshot = {
             "state": "disabled",
@@ -83,12 +77,15 @@ class LiveWifiControlSession:
             "fault": None,
             "center_packets": 0,
             "non_center_packets": 0,
-            "max_offset": self._max_offset,
+            "minimum_offset": self._minimum_offset,
+            "maximum_offset": self._maximum_offset,
+            "current_protocol_offset": 0,
             "transport_ack_count": 0,
             "last_ack_sequence": None,
             "transport_response_count": 0,
             "last_response_sequence": None,
             "ambiguous_window_count": 0,
+            "flow_ack_sent_count": 0,
             "keepalive_sent_count": 0,
             "keepalive_response_count": 0,
         }
@@ -112,12 +109,6 @@ class LiveWifiControlSession:
     def submit(self, value: ControlInput) -> None:
         self._inputs.put(value)
 
-    def set_max_offset(self, value: int) -> None:
-        value = int(value)
-        if not LIVE_PROTOTYPE_MIN_OFFSET <= value <= LIVE_PROTOTYPE_MAX_OFFSET:
-            raise ValueError("live offset is outside the captured safe envelope")
-        self._inputs.put(LiveOffsetUpdate(value))
-
     def stop(self, reason: str = "app_stop", timeout: float = 5.0) -> None:
         self._inputs.put(
             ControlInput(emergency_stop=True, exit_requested=True, source=reason, monotonic_ns=time.monotonic_ns())
@@ -134,7 +125,13 @@ class LiveWifiControlSession:
         try:
             asyncio.run(self._run())
         except BaseException as exc:
-            self._set(state="fault", fault=f"{type(exc).__name__}: {exc}")
+            self._set(
+                state="fault",
+                yaw=0.0,
+                pitch=0.0,
+                current_protocol_offset=0,
+                fault=f"{type(exc).__name__}: {exc}",
+            )
             self._event("live_control_thread_error", error=f"{type(exc).__name__}: {exc}")
         finally:
             self._done.set()
@@ -150,7 +147,6 @@ class LiveWifiControlSession:
         controller = GimbalUdpController(transport, on_transition=self.transition_handler)
         receiver: asyncio.Task | None = None
         udp_ready = asyncio.Event()
-        active_since_ns: int | None = None
         neutral_required = False
         last_publisher_check_ns = 0
 
@@ -163,6 +159,7 @@ class LiveWifiControlSession:
                     transport_response_count=getattr(transport, "response_packet_count", 0),
                     last_response_sequence=getattr(transport, "last_response_sequence", None),
                     ambiguous_window_count=getattr(transport, "ambiguous_window_count", 0),
+                    flow_ack_sent_count=getattr(transport, "flow_ack_sent_count", 0),
                     keepalive_sent_count=getattr(transport, "keepalive_sent_count", 0),
                     keepalive_response_count=getattr(transport, "keepalive_response_count", 0),
                 )
@@ -217,18 +214,20 @@ class LiveWifiControlSession:
             last_keepalive_send_ns = time.monotonic_ns()
             await controller.arm(WifiControlPrerequisites(*([True] * 9)))
             self._ready.set()
-            self._set(state="armed", watchdog="healthy", last_center_ns=controller.last_center_ns)
+            self._set(
+                state="armed",
+                watchdog="healthy",
+                current_protocol_offset=0,
+                last_center_ns=controller.last_center_ns,
+            )
             self._event("live_control_armed", target_ip=target_ip, local_port=54232)
 
             while not self._stop.is_set():
                 priority_stop: ControlInput | None = None
-                pending_offset: int | None = None
                 while True:
                     try:
                         candidate = self._inputs.get_nowait()
-                        if isinstance(candidate, LiveOffsetUpdate):
-                            pending_offset = candidate.max_offset
-                        elif candidate.emergency_stop or candidate.exit_requested:
+                        if candidate.emergency_stop or candidate.exit_requested:
                             priority_stop = candidate
                         elif priority_stop is None:
                             self._latest = candidate
@@ -236,30 +235,17 @@ class LiveWifiControlSession:
                         break
                 if priority_stop is not None:
                     self._latest = priority_stop
-                if pending_offset is not None and pending_offset != self._max_offset:
-                    if controller.state == WifiGimbalState.ACTIVE:
-                        await controller.release_live("offset_change")
-                    self._latest = ControlInput(
-                        source="offset_slider",
-                        monotonic_ns=time.monotonic_ns(),
-                        active=False,
-                    )
-                    active_since_ns = None
-                    neutral_required = False
-                    self._max_offset = pending_offset
-                    self._set(
-                        state="armed",
-                        yaw=0.0,
-                        pitch=0.0,
-                        max_offset=self._max_offset,
-                        last_center_ns=controller.last_center_ns,
-                    )
-                    self._event("live_offset_changed", max_offset=self._max_offset)
                 now = time.monotonic_ns()
                 value = self._latest
                 if value.emergency_stop or value.exit_requested:
                     await controller.emergency_stop("ui_stop")
-                    self._set(state="disabled", yaw=0.0, pitch=0.0, last_center_ns=controller.last_center_ns)
+                    self._set(
+                        state="disabled",
+                        yaw=0.0,
+                        pitch=0.0,
+                        current_protocol_offset=0,
+                        last_center_ns=controller.last_center_ns,
+                    )
                     self._stop.set()
                     break
                 if now - last_publisher_check_ns >= 1_000_000_000:
@@ -278,6 +264,9 @@ class LiveWifiControlSession:
                 if now - last_keepalive_send_ns >= 1_000_000_000:
                     await send_verified_keepalive()
                     last_keepalive_send_ns = time.monotonic_ns()
+                flow_ack = await transport.send_flow_ack_if_due()
+                if flow_ack is not None:
+                    self._set(flow_ack_sent_count=transport.flow_ack_sent_count)
                 last_response_ns = transport.last_keepalive_response_ns
                 if (
                     last_response_ns is None
@@ -286,50 +275,56 @@ class LiveWifiControlSession:
                     await controller.emergency_stop("control_keepalive_stale")
                     raise TimeoutError("Pocket 04/50 control keepalive stale for 2.5 seconds")
                 stale = not value.monotonic_ns or now - value.monotonic_ns > 250_000_000
-                quantized = Pocket3StickCommand.from_axes(
-                    yaw_axis=value.yaw / LIVE_MAXIMUM_INPUT,
-                    pitch_axis=value.pitch / LIVE_MAXIMUM_INPUT,
-                    max_offset=self._max_offset,
+                quantized = Pocket3StickCommand.from_radial_axes(
+                    yaw_axis=value.yaw,
+                    pitch_axis=value.pitch,
+                    minimum_offset=self._minimum_offset,
+                    maximum_offset=self._maximum_offset,
                 )
-                # A curved joystick can emit a tiny non-zero float immediately
-                # outside its deadzone.  If that value rounds to the protocol
-                # center, treat it as released rather than asking the strict
-                # writer to send a non-center command that is actually center.
+                # The profile is authoritative for the exact center/non-center
+                # boundary after deadzone and radial speed conversion.
                 active = value.active and not quantized.is_center and not stale
                 if neutral_required:
                     if not value.active or (value.yaw == 0 and value.pitch == 0):
                         neutral_required = False
-                        self._set(state="armed", watchdog="healthy")
+                        self._set(
+                            state="armed",
+                            watchdog="healthy",
+                            current_protocol_offset=0,
+                        )
                     await asyncio.sleep(0.02)
                     continue
                 if not active:
                     if controller.state == WifiGimbalState.ACTIVE:
                         await controller.release_live("input_release_or_watchdog")
-                        self._set(state="armed", yaw=0.0, pitch=0.0, last_center_ns=controller.last_center_ns)
+                        self._set(
+                            state="armed",
+                            yaw=0.0,
+                            pitch=0.0,
+                            current_protocol_offset=0,
+                            last_center_ns=controller.last_center_ns,
+                        )
                     if stale and value.active:
                         neutral_required = True
                         self._set(watchdog="expired")
-                    active_since_ns = None
-                    await asyncio.sleep(0.02)
-                    continue
-                if active_since_ns is None:
-                    active_since_ns = now
-                if now - active_since_ns >= 2_000_000_000:
-                    await controller.release_live("continuous_limit_2s")
-                    neutral_required = True
-                    self._set(state="centered", yaw=0.0, pitch=0.0, watchdog="continuous_limit")
                     await asyncio.sleep(0.02)
                     continue
                 await controller.send_live_axes(
                     yaw=value.yaw,
                     pitch=value.pitch,
-                    maximum_input=LIVE_MAXIMUM_INPUT,
-                    max_offset=self._max_offset,
+                    minimum_offset=self._minimum_offset,
+                    maximum_offset=self._maximum_offset,
+                )
+                magnitude = min(1.0, math.hypot(value.yaw, value.pitch))
+                current_offset = round(
+                    self._minimum_offset
+                    + magnitude * (self._maximum_offset - self._minimum_offset)
                 )
                 self._set(
                     state="active",
                     yaw=value.yaw,
                     pitch=value.pitch,
+                    current_protocol_offset=current_offset,
                     last_command_ns=controller.last_send_ns,
                     center_packets=controller.center_packets,
                     non_center_packets=controller.non_center_packets,

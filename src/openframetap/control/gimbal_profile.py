@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import struct
 
 from openframetap.protocol.duml import decode_duml_frame, encode_duml_frame
@@ -16,8 +17,7 @@ CAPTURED_YAW_MAX = 1295
 INITIAL_TEST_MAX_OFFSET = 16
 # Common symmetric envelope observed in the Mimo capture.  Pitch-negative is
 # the limiting direction: 1024 - 836 = 188.
-LIVE_PROTOTYPE_MIN_OFFSET = 16
-LIVE_PROTOTYPE_DEFAULT_OFFSET = 96
+LIVE_PROTOTYPE_MIN_OFFSET = 32
 LIVE_PROTOTYPE_MAX_OFFSET = 188
 CONTROL_KEEPALIVE_REQUEST = bytes.fromhex("010405")
 CONTROL_KEEPALIVE_RESPONSE = bytes.fromhex("0001040100050101")
@@ -81,6 +81,44 @@ class Pocket3StickCommand:
         return cls(
             pitch=STICK_CENTER + round(float(pitch_axis) * int(max_offset)),
             yaw=STICK_CENTER + round(float(yaw_axis) * int(max_offset)),
+        )
+
+    @classmethod
+    def from_radial_axes(
+        cls,
+        *,
+        yaw_axis: float,
+        pitch_axis: float,
+        minimum_offset: int = LIVE_PROTOTYPE_MIN_OFFSET,
+        maximum_offset: int = LIVE_PROTOTYPE_MAX_OFFSET,
+    ) -> "Pocket3StickCommand":
+        """Map unit-circle displacement to a linear radial protocol speed.
+
+        Zero remains the exact center command.  Any non-zero input starts at
+        ``minimum_offset`` and radial magnitude 1 reaches ``maximum_offset``.
+        Diagonal input is normalized as one vector so it is not faster than a
+        cardinal direction.
+        """
+
+        yaw = float(yaw_axis)
+        pitch = float(pitch_axis)
+        if not -1.0 <= yaw <= 1.0 or not -1.0 <= pitch <= 1.0:
+            raise ValueError("radial axes must be within -1.0..1.0")
+        if not 1 <= int(minimum_offset) < int(maximum_offset) <= LIVE_PROTOTYPE_MAX_OFFSET:
+            raise ValueError("radial offset range is outside the captured envelope")
+        magnitude = math.hypot(yaw, pitch)
+        if magnitude == 0:
+            return cls()
+        if magnitude > 1.0:
+            yaw /= magnitude
+            pitch /= magnitude
+            magnitude = 1.0
+        protocol_magnitude = int(minimum_offset) + magnitude * (
+            int(maximum_offset) - int(minimum_offset)
+        )
+        return cls(
+            pitch=STICK_CENTER + round((pitch / magnitude) * protocol_magnitude),
+            yaw=STICK_CENTER + round((yaw / magnitude) * protocol_magnitude),
         )
 
 

@@ -24,6 +24,10 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
             self.received = 0
             self.ack_observed_count = 0
             self.last_ack_sequence = None
+            self.response_packet_count = 0
+            self.last_response_sequence = None
+            self.ambiguous_window_count = 0
+            self.flow_ack_sent_count = 0
             self.keepalive_sent_count = 0
             self.keepalive_response_count = 0
             self.last_keepalive_response_ns = None
@@ -41,6 +45,10 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
             self.keepalive_response_count += 1
             self.last_keepalive_response_ns = time.monotonic_ns()
             return {"kind": "control_keepalive"}
+
+        async def send_flow_ack_if_due(self):
+            self.flow_ack_sent_count += 1
+            return {"kind": "transport_flow_ack"}
 
         async def receive_datagram(self):
             if self.received == 0:
@@ -76,30 +84,28 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
         time.sleep(0.01)
     assert session.snapshot()["state"] == "armed"
     assert session.snapshot()["keepalive_response_count"] >= 1
-    # Values just outside the GUI curve's deadzone may be non-zero floats but
-    # still quantize to the protocol center.  They must remain safely armed,
-    # not fault the strict non-center writer.
+    # A non-zero radial value starts at the configured minimum protocol speed.
     session.submit(
         ControlInput(yaw=0.001, source="test", monotonic_ns=time.monotonic_ns(), active=True)
     )
     time.sleep(0.15)
-    assert session.snapshot()["state"] == "armed"
-    assert not any(not item.is_center for item in FakeTransport.instances[0].commands)
-    session.set_max_offset(160)
-    deadline = time.monotonic() + 1
-    while session.snapshot()["max_offset"] != 160 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert session.snapshot()["max_offset"] == 160
+    assert session.snapshot()["state"] == "active"
+    assert any(item.yaw == 1024 + 32 for item in FakeTransport.instances[0].commands)
     session.submit(
-        ControlInput(yaw=0.20, source="test", monotonic_ns=time.monotonic_ns(), active=True)
+        ControlInput(yaw=1.0, source="test", monotonic_ns=time.monotonic_ns(), active=True)
     )
     deadline = time.monotonic() + 1
-    while not any(not item.is_center for item in FakeTransport.instances[0].commands) and time.monotonic() < deadline:
+    while (
+        not any(item.yaw == 1024 + 188 for item in FakeTransport.instances[0].commands)
+        and time.monotonic() < deadline
+    ):
         time.sleep(0.01)
     session.stop("test_stop")
     commands = FakeTransport.instances[0].commands
     assert any(not item.is_center for item in commands)
-    assert any(item.yaw == 1024 + 160 for item in commands)
+    assert any(item.yaw == 1024 + 188 for item in commands)
+    assert session.snapshot()["minimum_offset"] == 32
+    assert session.snapshot()["maximum_offset"] == 188
     assert commands[-1].is_center
     assert sum(item.is_center for item in commands) >= 9
     assert session.snapshot()["state"] == "disabled", session.snapshot()
