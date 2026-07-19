@@ -181,6 +181,7 @@ Usage:
   ./scripts/remote.sh media-status
   ./scripts/remote.sh media-stop-all
   ./scripts/remote.sh app-start [seconds]
+  ./scripts/remote.sh app-start-mock [seconds]
   ./scripts/remote.sh app-status
   ./scripts/remote.sh app-stop
   ./scripts/remote.sh rtmp-self-test
@@ -226,6 +227,21 @@ test -f artifacts/private/approved-live-preview/stream.json
 .venv/bin/python -m openframetap app --background --duration '$seconds' --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem' --control-mode disabled
 printf 'APP_OUTPUT=%s\\n' 'artifacts/private/$stem'"
     ;;
+  app-start-mock)
+    seconds="${2:-120}"
+    [[ "$seconds" =~ ^[0-9]+$ ]] && (( seconds >= 1 && seconds <= 600 )) || {
+      echo 'app-start-mock seconds must be an integer from 1 to 600' >&2
+      exit 2
+    }
+    deploy || exit $?
+    stamp="$(timestamp)"
+    stem="control-session-$stamp"
+    run_remote app-start-mock "set -eu
+cd $REMOTE_DIR
+test -f artifacts/private/approved-live-preview/stream.json
+.venv/bin/python -m openframetap app --background --duration '$seconds' --proposal artifacts/private/approved-live-preview/stream.json --address '$POCKET3_ADDRESS' --output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem' --control-mode mock
+printf 'APP_OUTPUT=%s\\n' 'artifacts/private/$stem'"
+    ;;
   app-status)
     run_remote app-status "set -eu
 cd $REMOTE_DIR
@@ -240,7 +256,7 @@ printf 'APP_OUTPUT=%s\\n' \"\$last\""
     status=$?
     [[ $status -eq 0 ]] || exit "$status"
     output_path="$(extract_stem 'APP_OUTPUT')"
-    if [[ "$output_path" == artifacts/private/app-session-* ]]; then
+    if [[ "$output_path" == artifacts/private/app-session-* || "$output_path" == artifacts/private/control-session-* ]]; then
       stem="${output_path##*/}"
       pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
       pull_dir "artifacts/sanitized/$stem" "$ROOT_DIR/artifacts/sanitized" || exit $?

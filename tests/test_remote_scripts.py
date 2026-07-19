@@ -43,7 +43,7 @@ def run_bash(script: str, *, env: dict[str, str]) -> subprocess.CompletedProcess
 
 def test_remote_wrapper_exposes_owned_app_lifecycle_only() -> None:
     text = (ROOT / "scripts/remote.sh").read_text(encoding="utf-8")
-    for action in ("app-start", "app-status", "app-stop"):
+    for action in ("app-start", "app-start-mock", "app-status", "app-stop"):
         assert action in text
     assert "pkill python" not in text
     assert "killall" not in text
