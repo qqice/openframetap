@@ -130,3 +130,17 @@ remains fail-closed. The next useful evidence is an Android Bluetooth HCI snoop
 and, if BLE contains no joystick frames, a simultaneous owned-LAN packet capture
 while DJI Mimo visibly moves Pocket 3 from its preview screen. That capture must
 be analyzed before proposing another command.
+
+OpenFrameTap now provides an immutable-capture analyzer for that evidence:
+
+```bash
+python -m openframetap analyze hci-gimbal android-btsnoop_hci.log \
+  --output artifacts/local/android-mimo-gimbal-analysis.json
+```
+
+It supports both Android/HCI-UART BTSnoop datalink 1002 and BlueZ btmon Linux
+Monitor datalink 2001, extracts ATT write/notification payloads, performs DUML
+stream reassembly and CRC validation, and reports every app-to-device gimbal
+frame without modifying the source capture. Replaying the one-shot session's
+btmon capture found exactly the three expected `04/0C` writes and zero
+reassembly errors, providing a fixture-independent validation of the extractor.

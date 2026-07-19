@@ -136,6 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     glass_latency.add_argument("--phone-model")
     glass_latency.add_argument("--ambient-notes")
+    hci_gimbal = analyze_commands.add_parser(
+        "hci-gimbal", help="extract ATT/DUML gimbal writes from an immutable BTSnoop"
+    )
+    hci_gimbal.add_argument("capture", type=Path)
+    hci_gimbal.add_argument("--output", type=Path, required=True)
 
     app = subcommands.add_parser("app", help="fullscreen OpenFrameTap video and control UI")
     app_mode = app.add_mutually_exclusive_group()
@@ -506,6 +511,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(payload, indent=2))
         return 0 if payload["all_final_output_zero"] and payload["fff5_write_count"] == 0 else 1
+    if args.command == "analyze" and args.analyze_command == "hci-gimbal":
+        from openframetap.analysis.hci_snoop import write_hci_analysis
+
+        try:
+            payload = write_hci_analysis(args.capture, args.output)
+        except (OSError, ValueError) as exc:
+            print(f"HCI_GIMBAL_ANALYSIS_FAILED: {exc}")
+            return 1
+        print(json.dumps({key: payload[key] for key in (
+            "source_sha256", "btsnoop_record_count", "att_record_count",
+            "duml_frame_count", "reassembly_error_count", "gimbal_write_count",
+            "command_counts",
+        )}, indent=2))
+        return 0
     if args.command == "app":
         from openframetap.video.player_process import ProcessRegistry
 
