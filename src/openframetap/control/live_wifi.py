@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import queue
 import threading
@@ -17,7 +17,12 @@ from openframetap.control.gimbal_controller import (
     WifiControlPrerequisites,
     WifiGimbalState,
 )
-from openframetap.control.gimbal_profile import Pocket3StickCommand
+from openframetap.control.gimbal_profile import (
+    LIVE_PROTOTYPE_DEFAULT_OFFSET,
+    LIVE_PROTOTYPE_MAX_OFFSET,
+    LIVE_PROTOTYPE_MIN_OFFSET,
+    Pocket3StickCommand,
+)
 from openframetap.protocol.reassembly import DumlStreamReassembler
 from openframetap.transport.dji_wifi_udp import (
     DjiWifiUdpTransport,
@@ -31,7 +36,11 @@ def _utc() -> str:
 
 
 LIVE_MAXIMUM_INPUT = 0.20
-LIVE_MAX_OFFSET = 32
+
+
+@dataclass(frozen=True, slots=True)
+class LiveOffsetUpdate:
+    max_offset: int
 
 
 class LiveWifiControlSession:
@@ -45,18 +54,22 @@ class LiveWifiControlSession:
         datagram_handler: Callable[[dict], None] | None = None,
         transition_handler: Callable[[dict], None] | None = None,
         transport_factory: Callable = DjiWifiUdpTransport,
+        initial_max_offset: int = LIVE_PROTOTYPE_DEFAULT_OFFSET,
     ) -> None:
+        if not LIVE_PROTOTYPE_MIN_OFFSET <= initial_max_offset <= LIVE_PROTOTYPE_MAX_OFFSET:
+            raise ValueError("initial live offset is outside the captured safe envelope")
         self.state = state
         self.event_handler = event_handler or (lambda event: None)
         self.datagram_handler = datagram_handler or (lambda event: None)
         self.transition_handler = transition_handler or (lambda event: None)
         self.transport_factory = transport_factory
-        self._inputs: queue.SimpleQueue[ControlInput] = queue.SimpleQueue()
+        self._inputs: queue.SimpleQueue[ControlInput | LiveOffsetUpdate] = queue.SimpleQueue()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._done = threading.Event()
         self._latest = ControlInput(source="live")
+        self._max_offset = int(initial_max_offset)
         self._snapshot_lock = threading.Lock()
         self._snapshot = {
             "state": "disabled",
@@ -70,6 +83,7 @@ class LiveWifiControlSession:
             "fault": None,
             "center_packets": 0,
             "non_center_packets": 0,
+            "max_offset": self._max_offset,
         }
 
     def _set(self, **values) -> None:
@@ -90,6 +104,12 @@ class LiveWifiControlSession:
 
     def submit(self, value: ControlInput) -> None:
         self._inputs.put(value)
+
+    def set_max_offset(self, value: int) -> None:
+        value = int(value)
+        if not LIVE_PROTOTYPE_MIN_OFFSET <= value <= LIVE_PROTOTYPE_MAX_OFFSET:
+            raise ValueError("live offset is outside the captured safe envelope")
+        self._inputs.put(LiveOffsetUpdate(value))
 
     def stop(self, reason: str = "app_stop", timeout: float = 5.0) -> None:
         self._inputs.put(
@@ -169,10 +189,13 @@ class LiveWifiControlSession:
 
             while not self._stop.is_set():
                 priority_stop: ControlInput | None = None
+                pending_offset: int | None = None
                 while True:
                     try:
                         candidate = self._inputs.get_nowait()
-                        if candidate.emergency_stop or candidate.exit_requested:
+                        if isinstance(candidate, LiveOffsetUpdate):
+                            pending_offset = candidate.max_offset
+                        elif candidate.emergency_stop or candidate.exit_requested:
                             priority_stop = candidate
                         elif priority_stop is None:
                             self._latest = candidate
@@ -180,6 +203,25 @@ class LiveWifiControlSession:
                         break
                 if priority_stop is not None:
                     self._latest = priority_stop
+                if pending_offset is not None and pending_offset != self._max_offset:
+                    if controller.state == WifiGimbalState.ACTIVE:
+                        await controller.release_live("offset_change")
+                    self._latest = ControlInput(
+                        source="offset_slider",
+                        monotonic_ns=time.monotonic_ns(),
+                        active=False,
+                    )
+                    active_since_ns = None
+                    neutral_required = False
+                    self._max_offset = pending_offset
+                    self._set(
+                        state="armed",
+                        yaw=0.0,
+                        pitch=0.0,
+                        max_offset=self._max_offset,
+                        last_center_ns=controller.last_center_ns,
+                    )
+                    self._event("live_offset_changed", max_offset=self._max_offset)
                 now = time.monotonic_ns()
                 value = self._latest
                 if value.emergency_stop or value.exit_requested:
@@ -204,7 +246,7 @@ class LiveWifiControlSession:
                 quantized = Pocket3StickCommand.from_axes(
                     yaw_axis=value.yaw / LIVE_MAXIMUM_INPUT,
                     pitch_axis=value.pitch / LIVE_MAXIMUM_INPUT,
-                    max_offset=LIVE_MAX_OFFSET,
+                    max_offset=self._max_offset,
                 )
                 # A curved joystick can emit a tiny non-zero float immediately
                 # outside its deadzone.  If that value rounds to the protocol
@@ -239,7 +281,7 @@ class LiveWifiControlSession:
                     yaw=value.yaw,
                     pitch=value.pitch,
                     maximum_input=LIVE_MAXIMUM_INPUT,
-                    max_offset=LIVE_MAX_OFFSET,
+                    max_offset=self._max_offset,
                 )
                 self._set(
                     state="active",

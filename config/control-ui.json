@@ -7,6 +7,9 @@
     "radius": 110.0,
     "deadzone": 0.12,
     "maximum_output": 0.20,
-    "cubic_blend": 0.65
+    "cubic_blend": 0.65,
+    "live_offset_min": 16,
+    "live_offset_default": 96,
+    "live_offset_max": 188
   }
 }

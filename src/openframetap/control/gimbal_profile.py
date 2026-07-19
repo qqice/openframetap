@@ -14,7 +14,11 @@ CAPTURED_PITCH_MAX = 1256
 CAPTURED_YAW_MIN = 810
 CAPTURED_YAW_MAX = 1295
 INITIAL_TEST_MAX_OFFSET = 16
-LIVE_PROTOTYPE_MAX_OFFSET = 32
+# Common symmetric envelope observed in the Mimo capture.  Pitch-negative is
+# the limiting direction: 1024 - 836 = 188.
+LIVE_PROTOTYPE_MIN_OFFSET = 16
+LIVE_PROTOTYPE_DEFAULT_OFFSET = 96
+LIVE_PROTOTYPE_MAX_OFFSET = 188
 
 
 @dataclass(frozen=True, slots=True)

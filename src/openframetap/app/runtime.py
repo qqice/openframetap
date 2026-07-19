@@ -123,6 +123,7 @@ class GtkReadOnlyApp:
         self.keyboard = None
         self.touch = None
         self.joystick_widget = None
+        self.offset_scale = None
         self.input_events = None
         self.sent_commands = None
         self.control_states = None
@@ -149,6 +150,7 @@ class GtkReadOnlyApp:
                 event_handler=self._event,
                 datagram_handler=self.sent_commands.write,
                 transition_handler=self.control_states.write,
+                initial_max_offset=joystick.live_offset_default,
             )
 
     def _event(self, payload: dict) -> None:
@@ -278,6 +280,24 @@ class GtkReadOnlyApp:
             mode.set_name("control-mock" if self.control_mode == "mock" else "control-live")
             controls.pack_start(mode, False, False, 0)
             self.labels["control"] = mode
+            if self.control_mode == "live":
+                offset_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                offset_label = Gtk.Label(label=f"OFFSET {self.touch.config.live_offset_default}")
+                offset = Gtk.Scale.new_with_range(
+                    Gtk.Orientation.HORIZONTAL,
+                    self.touch.config.live_offset_min,
+                    self.touch.config.live_offset_max,
+                    1,
+                )
+                offset.set_value(self.touch.config.live_offset_default)
+                offset.set_digits(0)
+                offset.set_size_request(230, -1)
+                offset.connect("value-changed", self._on_offset_changed)
+                offset_box.pack_start(offset_label, False, False, 0)
+                offset_box.pack_start(offset, False, False, 0)
+                controls.pack_start(offset_box, False, False, 0)
+                self.offset_scale = offset
+                self.labels["offset"] = offset_label
             stop_button = Gtk.Button(label="STOP  Space")
             stop_button.set_name("emergency-stop")
             stop_button.connect("clicked", lambda *_args: self._control_emergency())
@@ -364,6 +384,14 @@ class GtkReadOnlyApp:
             )
             self.latest_ui_input = value
             self.live_control.submit(value)
+
+    def _on_offset_changed(self, scale) -> None:
+        if not self.live_control:
+            return
+        value = int(round(scale.get_value()))
+        self.live_control.set_max_offset(value)
+        if "offset" in self.labels:
+            self.labels["offset"].set_text(f"OFFSET {value}")
 
     def _mock_emergency(self) -> None:
         """Compatibility alias retained for existing mock-control tests."""
@@ -532,7 +560,8 @@ class GtkReadOnlyApp:
             if "control" in self.labels:
                 self.labels["control"].set_text(
                     f"LIVE · {str(live['state']).upper()}  "
-                    f"Y {float(live['yaw']):+.2f}  P {float(live['pitch']):+.2f}"
+                    f"Y {float(live['yaw']):+.2f}  P {float(live['pitch']):+.2f}  "
+                    f"O {int(live['max_offset'])}"
                 )
         bus = self.pipeline.get_bus()
         while message := bus.pop_filtered(Gst.MessageType.ERROR | Gst.MessageType.EOS):
@@ -766,7 +795,6 @@ class GtkReadOnlyApp:
                         **self.live_control.snapshot(),
                         "mock": False,
                         "maximum_input": 0.20,
-                        "max_offset": 32,
                         "rate_hz": 10,
                         "watchdog_ms": 250,
                         "continuous_limit_seconds": 2,

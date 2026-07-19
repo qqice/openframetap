@@ -17,6 +17,11 @@ def test_input_normalization_and_json_configuration() -> None:
     assert config.logical_width == 1280 and config.logical_height == 720
     assert config.deadzone == 0.12
     assert config.maximum_output == 0.20
+    assert (config.live_offset_min, config.live_offset_default, config.live_offset_max) == (
+        16,
+        96,
+        188,
+    )
     with pytest.raises(ValueError):
         ControlInput(yaw=1.01)
 

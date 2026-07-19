@@ -68,7 +68,7 @@ def test_fixed_fields_roll_ranges_and_axes_fail_closed() -> None:
     with pytest.raises(ValueError, match="-1.0"):
         Pocket3StickCommand.from_axes(yaw_axis=1.1, pitch_axis=0)
     with pytest.raises(ValueError, match="max_offset"):
-        Pocket3StickCommand.from_axes(yaw_axis=1, pitch_axis=0, max_offset=96)
+        Pocket3StickCommand.from_axes(yaw_axis=1, pitch_axis=0, max_offset=189)
 
 
 def test_04_50_and_unknown_commands_are_rejected() -> None:

@@ -73,6 +73,11 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
     time.sleep(0.15)
     assert session.snapshot()["state"] == "armed"
     assert not any(not item.is_center for item in FakeTransport.instances[0].commands)
+    session.set_max_offset(160)
+    deadline = time.monotonic() + 1
+    while session.snapshot()["max_offset"] != 160 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert session.snapshot()["max_offset"] == 160
     session.submit(
         ControlInput(yaw=0.20, source="test", monotonic_ns=time.monotonic_ns(), active=True)
     )
@@ -82,6 +87,7 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
     session.stop("test_stop")
     commands = FakeTransport.instances[0].commands
     assert any(not item.is_center for item in commands)
+    assert any(item.yaw == 1024 + 160 for item in commands)
     assert commands[-1].is_center
     assert sum(item.is_center for item in commands) >= 9
     assert session.snapshot()["state"] == "disabled", session.snapshot()

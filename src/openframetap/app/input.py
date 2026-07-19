@@ -39,6 +39,9 @@ class JoystickConfig:
     deadzone: float = 0.12
     maximum_output: float = 0.25
     cubic_blend: float = 0.65
+    live_offset_min: int = 16
+    live_offset_default: int = 96
+    live_offset_max: int = 188
 
     def __post_init__(self) -> None:
         if self.logical_width <= 0 or self.logical_height <= 0 or self.radius <= 0:
@@ -49,6 +52,10 @@ class JoystickConfig:
             raise ValueError("maximum output must be 0..1")
         if not 0 <= self.cubic_blend <= 1:
             raise ValueError("cubic blend must be 0..1")
+        if not 1 <= self.live_offset_min <= self.live_offset_default <= self.live_offset_max:
+            raise ValueError("live offset bounds must satisfy 1 <= min <= default <= max")
+        if self.live_offset_max > 188:
+            raise ValueError("live offset exceeds the symmetric Mimo-captured envelope")
 
     @classmethod
     def load(cls, path: Path) -> "JoystickConfig":
