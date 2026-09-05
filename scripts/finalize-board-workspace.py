@@ -33,7 +33,11 @@ for folder in (new/'.venv/bin',new/'.venv/lib/python3.12/site-packages'):
             try:text=p.read_text()
             except (UnicodeError,OSError):continue
             if str(old) in text:p.write_text(text.replace(str(old),str(new)))
-subprocess.run([str(new/'.venv/bin/python'),'-m','pip','install','--no-deps','--no-build-isolation','-e',str(new)],check=True)
+# The existing editable .pth was relocated above. Rebuilding it would require
+# a packaging backend not installed in the runtime, and adds no runtime value.
+subprocess.run([str(new/'.venv/bin/python'),'-c',
+    'import openframetap; from pathlib import Path; '
+    f'assert Path(openframetap.__file__).resolve().is_relative_to(Path({str(new)!r}))'],check=True)
 subprocess.run(['git','fsck','--no-progress'],cwd=new,check=True)
 subprocess.run([str(new/'.venv/bin/python'),'-m','pytest','-q'],cwd=new,check=True)
 subprocess.run([str(new/'.venv/bin/python'),str(new/'scripts/install-desktop.py')],cwd=new,check=True)
