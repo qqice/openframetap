@@ -177,6 +177,10 @@ Usage:
   ./scripts/remote.sh preview-file <local-sample>
   ./scripts/remote.sh analyze-wifi-media <local-pcap>
   ./scripts/remote.sh preview-wifi-capture <local-pcap> [seconds]
+  ./scripts/remote.sh normal-preview [seconds]
+  ./scripts/remote.sh normal-pull <normal-session-stem>
+  ./scripts/remote.sh normal-cleanup
+  ./scripts/remote.sh remote-test
   ./scripts/remote.sh live-preview [seconds]
   ./scripts/remote.sh preview-status
   ./scripts/remote.sh preview-stop
@@ -213,6 +217,31 @@ EOF
 
 action="${1:-}"
 case "$action" in
+  remote-test)
+    [[ $# -eq 1 ]] || exit 2
+    deploy || exit $?
+    run_remote remote-test "cd $REMOTE_DIR && .venv/bin/python -m pytest -q"
+    ;;
+  normal-pull)
+    [[ $# -eq 2 && "$2" =~ ^normal-session-[0-9]{8}T[0-9]{6}Z$ ]] || exit 2
+    pull_dir "artifacts/private/$2" "$ROOT_DIR/artifacts/private"
+    ;;
+  normal-preview)
+    seconds="${2:-120}"
+    [[ $# -le 2 && "$seconds" =~ ^[1-9][0-9]*$ && "$seconds" -le 3600 ]] || exit 2
+    deploy || exit $?
+    stem="normal-session-$(timestamp)"
+    git_head="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+    run_remote normal-preview "set -eu
+cd $REMOTE_DIR
+OPENFRAMETAP_GIT_HEAD='$git_head' .venv/bin/python -m openframetap pocket3 normal --address '$POCKET3_ADDRESS' --seconds '$seconds' --output 'artifacts/private/$stem'"
+    status=$?
+    pull_dir "artifacts/private/$stem" "$ROOT_DIR/artifacts/private" || exit $?
+    exit "$status"
+    ;;
+  normal-cleanup)
+    run_remote normal-cleanup "cd $REMOTE_DIR && .venv/bin/python -m openframetap.network.softap"
+    ;;
   command)
     [[ $# -eq 2 ]] || { usage >&2; exit 2; }
     run_remote command "$2"

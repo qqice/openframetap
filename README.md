@@ -4,6 +4,16 @@ OpenFrameTap is an open-source remote monitoring and control terminal prototype 
 
 The Git repository on the local computer is the only source of truth. Files are deployed through SSH to `~/openframetap-runtime` on the ROCK 4D, while all remote evidence is copied back to ignored local `artifacts/remote/` directories.
 
+## Normal-mode prototype
+
+`./scripts/remote.sh normal-preview 120` connects through BLE to read Pocket 3
+hotspot credentials, joins a temporary station profile and receives native UDP
+video through MPP/Wayland. It requires wired `end0` as the default route, and
+restores the previous wireless connection at exit. See
+[normal-mode session](docs/normal-mode-session.md) for evidence and cleanup.
+The older milestone restrictions below describe the original RTMP/BLE workflows;
+the normal-mode command has its own fixed command profile and network rollback.
+
 ## Safety boundary
 
 - The validated runtime baseline is Armbian with `6.1.115-vendor-rk35xx`; these tools never update the kernel, bootloader, DTB, initramfs, firmware, or `/boot`.
@@ -96,7 +106,7 @@ The permitted pairing attempts are now complete. The command remains documented 
 
 ```bash
 python -m pip install -e '.[test]'
-python -m pytest
+./scripts/remote.sh remote-test
 python -m openframetap ble scan --replay tests/fixtures/advertisements.json --json /tmp/replay.json
 python -m openframetap duml decode --hex 550e046604026b1300041c48e5e2
 python -m openframetap video server doctor
