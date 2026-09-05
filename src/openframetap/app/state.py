@@ -11,6 +11,8 @@ class AppStateSnapshot:
     session_mode: str = "livestream"
     connection_stage: str = "starting"
     normal_video_online: bool = False
+    action_status: str = ''
+    recording_capability_raw: str | None = None
     device_name: str = "Pocket 3"
     ble_connected: bool = False
     pairing_state: str = "confirmed_previous_evidence"

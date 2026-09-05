@@ -117,3 +117,7 @@ class NormalControlUdpTransport(NormalUdpTransport):
     async def send_control_keepalive(self):
         async with self._serial_send:
             return await DjiWifiUdpTransport.send_control_keepalive(self)
+
+    async def send_camera_action(self, action):
+        async with self._serial_send:
+            return await DjiWifiUdpTransport.send_camera_action(self,action)

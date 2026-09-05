@@ -133,7 +133,7 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         log.write(json.dumps({'wall_time_utc': datetime.now(timezone.utc).isoformat(),
                               'monotonic_ns': time.monotonic_ns(), **payload}) + '\n')
         log.flush()
-        if control_session and payload.get('kind') in ('stick_center','stick_non_center','control_keepalive'):
+        if control_session and payload.get('kind') in ('stick_center','stick_non_center','control_keepalive','camera_action_sent'):
             control_session.datagram_handler(payload)
         if state_store and payload.get('event') in ('disconnected_callback','disconnect_complete'):
             state_store.update(ble_connected=False)
@@ -229,6 +229,8 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
                         for item in parser.feed(record.data) + parser.finish():
                             if item.frame:
                                 frame = item.frame
+                                if control_session:
+                                    control_session.observe_action_frame(frame)
                                 if state_store:
                                     from openframetap.app.normal_session import update_telemetry
                                     update_telemetry(state_store, frame, time.monotonic_ns())

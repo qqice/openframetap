@@ -125,7 +125,7 @@ class AppWindowHost:
             page.pack_start(widget,False,False,0)
         self.stack.add_named(page,'transition')
         css=Gtk.CssProvider()
-        css.load_from_data(b'window {background:#10151c;color:white;} label {color:white;font-size:20px;} button label {color:#111;}')
+        css.load_from_data(b'window {background:#10151c;color:white;} label {color:white;font-size:20px;} button {background-image:none;background:#253443;border:1px solid #466074;border-radius:18px;min-height:48px;padding:8px 20px;} button label {color:#f2f7fc;}')
         Gtk.StyleContext.add_provider_for_screen(self.Gdk.Screen.get_default(),css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.started=time.monotonic()
         self.progress_ticks=0

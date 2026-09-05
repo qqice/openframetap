@@ -83,6 +83,9 @@ class NormalGuiSession:
         if self.control_enabled:
             self.control.submit(value)
 
+    def request_action(self,action):
+        return self.control.request_action(action) if self.control_enabled else False
+
     def rearm(self):
         if self.control_enabled and self.snapshot()['state']=='disabled' and self._thread and self._thread.is_alive():
             self.control.rearm_requested.set()

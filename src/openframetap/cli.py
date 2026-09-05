@@ -176,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     app.add_argument("--duration", type=int, default=600)
     app.add_argument("--session-mode", choices=("livestream","normal"), default="livestream")
+    app.add_argument('--stream-resolution',type=int,choices=(480,720,1080),default=720)
     app.add_argument("--output", type=Path)
     app.add_argument("--sanitized-output", type=Path)
     app.add_argument("--no-ble", action="store_true")
@@ -699,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.control_mode,
                 "--session-mode",
                 args.session_mode,
+                '--stream-resolution',str(args.stream_resolution),
             ]
             if args.no_ble:
                 child.append("--no-ble")

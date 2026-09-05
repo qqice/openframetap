@@ -92,6 +92,7 @@ class GtkReadOnlyApp:
         artifact_root: Path | None = None,
         leave_livestream: bool = False,
         window_host=None,
+        stream_resolution=720,
         joystick_config_path: Path = Path("config/control-ui.json"),
         registry_path: Path = Path("runtime/media-processes.json"),
     ) -> None:
@@ -115,6 +116,9 @@ class GtkReadOnlyApp:
         self.artifact_root = artifact_root or self.private_output
         self.normal_session = None
         self.window_host=window_host
+        self.stream_resolution=stream_resolution
+        self.focus_mark=None
+        self.focus_mark_until=0.
         self.window_handlers=[]
         self.content_shown=False
         from openframetap.video.bitrate import EncodedBitrate
@@ -204,7 +208,7 @@ class GtkReadOnlyApp:
         self.stop_reason = reason
         self.latest_ui_input=ControlInput(source='shutdown',monotonic_ns=time.monotonic_ns())
         if self.window_host:
-            if not reason.startswith('mode_switch:'):
+            if not reason.startswith(('mode_switch:','quality_switch:')):
                 self.window_host.exit_requested=True
             if self.joystick_popover:
                 self.joystick_popover.hide()
@@ -301,6 +305,9 @@ class GtkReadOnlyApp:
         for key in ("device", "ble", "pairing", "rtmp", "media", "video", "battery", "rock", "age"):
             label = Gtk.Label(label=key)
             label.set_xalign(0.0)
+            if key=='media':
+                label.set_max_width_chars(16)
+                label.set_ellipsize(Pango.EllipsizeMode.END)
             header.pack_start(label, key in {"device", "media"}, key in {"device", "media"}, 8)
             self.labels[key] = label
         root.pack_start(header, False, False, 0)
@@ -364,14 +371,11 @@ class GtkReadOnlyApp:
             mode.set_ellipsize(Pango.EllipsizeMode.END)
             controls.pack_start(mode, True, True, 0)
             self.labels["control"] = mode
-            stop_button = Gtk.Button(label="STOP  Space")
-            stop_button.set_name("emergency-stop")
-            stop_button.connect("clicked", lambda *_args: self._control_emergency())
-            controls.pack_end(stop_button, False, False, 0)
-            if self.control_mode == 'live':
-                arm_button = Gtk.Button(label='启用控制')
-                arm_button.connect('clicked',lambda *_:self._control_arm())
-                controls.pack_end(arm_button,False,False,0)
+            for label,action in [('回中','recenter'),('180°','flip')]:
+                button=Gtk.Button(label=label)
+                button.set_size_request(92,56)
+                button.connect('clicked',lambda _,name=action:self._camera_action(name))
+                controls.pack_end(button,False,False,0)
         else:
             disabled = Gtk.Label(label="JOYSTICK DISABLED · READ-ONLY")
             disabled.set_name("control-disabled")
@@ -379,6 +383,10 @@ class GtkReadOnlyApp:
         exit_button = Gtk.Button(label="退出  Esc / Q")
         exit_button.connect("clicked", lambda *_args: self._request_stop("exit_button"))
         controls.pack_end(exit_button, False, False, 0)
+        quality=Gtk.Button(label='图传')
+        quality.set_size_request(92,56)
+        quality.connect('clicked',self._show_formats)
+        controls.pack_end(quality,False,False,0)
         root.pack_start(controls, False, False, 0)
         if self.window_host:
             self.window_host.mount(root)
@@ -392,8 +400,9 @@ class GtkReadOnlyApp:
             b"label { color: #fff; font-size: 15px; } #control-disabled { color: #ffcc33; font-size: 20px; } "
             b"#control-mock, #control-live { background: rgba(0,0,0,0.58); border-radius: 8px; } "
             b"#control-mock { color: #55ddff; font-size: 20px; } #control-live { color: #66ff88; font-size: 20px; } #emergency-stop { background: #b00020; color: white; } "
-            b"button { font-size: 18px; padding: 10px 18px; } "
-            b"#button-bar button label { color: #111; } #button-bar #emergency-stop label { color: #fff; }"
+            b"button { background-image:none; background-color:#253443; border:1px solid #466074; border-radius:18px; font-size:18px; padding:10px 18px; } "
+            b"button:active,button:checked {background-color:#087d9a;} button label {color:#f2f7fc;} "
+            b"#button-bar button label { color:#f2f7fc; } popover {background:#14202c;}"
         )
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
@@ -404,6 +413,12 @@ class GtkReadOnlyApp:
         self.fps_sink = fps_sink
         self.decoder = decoder
         self.video_sink = video_sink
+        self.video_widget=widget
+        tap=Gtk.GestureMultiPress.new(widget)
+        tap.set_touch_only(False)
+        tap.connect('released',self._on_video_tap)
+        tap.connect('pressed',lambda _,count,x,y:setattr(self,'video_press',(x,y,time.monotonic())))
+        self.video_tap=tap
         self.bitrate_pad=decoder.get_static_pad('sink')
         def count_encoded(_pad,info):
             if info.type & Gst.PadProbeType.BUFFER:
@@ -484,6 +499,77 @@ class GtkReadOnlyApp:
         self.touch.touch_cancel()
         self.latest_ui_input = ControlInput(source='manual_arm',monotonic_ns=time.monotonic_ns())
         self.live_control.rearm()
+
+    def _camera_action(self,name,x=0.5,y=0.5):
+        from openframetap.protocol.camera_actions import CameraAction
+        if self.keyboard:self.keyboard.reset()
+        if self.touch:self.touch.touch_cancel()
+        self._submit_control(ControlInput(source='camera_action',monotonic_ns=time.monotonic_ns()))
+        action=CameraAction(name,x,y)
+        if self.live_control:
+            accepted=self.live_control.request_action(action)
+            self.state.update(action_status='正在执行…' if accepted else '请等待当前操作完成')
+        else:
+            self._event(dict(kind='mock_camera_action',name=name,x=x,y=y))
+            self.state.update(action_status='模拟操作')
+
+    def _on_video_tap(self,gesture,count,x,y):
+        if count!=1 or not self.content_shown and self.window_host:return
+        import math
+        start=getattr(self,'video_press',None)
+        if not start or time.monotonic()-start[2]>0.6 or math.hypot(x-start[0],y-start[1])>12:return
+        from openframetap.protocol.camera_actions import focus_point
+        _,s=self.state.snapshot()
+        allocation=self.video_widget.get_allocation()
+        if self.touch and x<self.touch.config.overlay_size+40 and y>allocation.height-self.touch.config.overlay_size-25:return
+        point=focus_point(x,y,allocation.width,allocation.height,s.video_width or 0,s.video_height or 0)
+        if point is None:return
+        self._camera_action('focus',*point)
+        Gtk,Gdk,_,_=self.bindings
+        if self.focus_mark:self.focus_mark.destroy()
+        # Separate popup surface is required above gtkwaylandsink's native surface.
+        mark=Gtk.Popover.new(self.video_widget);mark.set_modal(False)
+        label=Gtk.Label(label='＋');label.set_size_request(40,40);mark.add(label)
+        rectangle=Gdk.Rectangle();rectangle.x=int(x);rectangle.y=int(y);rectangle.width=1;rectangle.height=1
+        mark.set_pointing_to(rectangle);mark.set_position(Gtk.PositionType.TOP)
+        mark.show_all();mark.popup()
+        self.focus_mark=mark;self.focus_mark_until=time.monotonic()+0.8
+
+    def _show_formats(self,button):
+        Gtk,_,_,_=self.bindings
+        popup=Gtk.Popover.new(button)
+        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=14)
+        box.set_border_width(18)
+        _,s=self.state.snapshot()
+        text=f'当前图传 H.264 · {s.video_width or 0} × {s.video_height or 0}'
+        box.pack_start(Gtk.Label(label=text),False,False,0)
+        if self.session_mode=='livestream':
+            row=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=8)
+            selected_height=s.video_height or self.stream_resolution
+            for height in (480,720,1080):
+                choice=Gtk.ToggleButton(label=f'{height}p')
+                choice.set_size_request(100,56);choice.set_active(height==selected_height)
+                def select(_,value=height):
+                    popup.popdown()
+                    if value!=selected_height:self._request_stop(f'quality_switch:{value}')
+                choice.connect('clicked',select);row.pack_start(choice,False,False,0)
+            box.pack_start(row,False,False,0)
+            box.pack_start(Gtk.Label(label='H.264 / 30 fps · 切换时短暂重新连接'),False,False,0)
+        else:
+            box.pack_start(Gtk.Label(label='当前已验证：H.264 720p\n更多图传编码与分辨率尚无已验证查询协议'),False,False,0)
+        box.pack_start(Gtk.Label(label='HEVC / MJPEG 不作为未经验证的选项开放'),False,False,0)
+        query=Gtk.Button(label='读取录像规格（非图传格式）')
+        query.connect('clicked',lambda *_:self._camera_action('query_formats'))
+        box.pack_start(query,False,False,0)
+        if s.recording_capability_raw:
+            from openframetap.video.formats import parse_recording_capability
+            entries=parse_recording_capability(bytes.fromhex(s.recording_capability_raw))
+            detail=f'收到 {len(entries)} 档录像规格；不据此切换图传' if entries else '未解析的录像规格回复已保存'
+        else:
+            detail='尚未收到录像规格表；图传选项以实机验证为准'
+        box.pack_start(Gtk.Label(label=detail),False,False,0)
+        popup.add(box);popup.show_all();popup.popup()
+        self.format_popup=popup
 
     def _mock_emergency(self) -> None:
         """Compatibility alias retained for existing mock-control tests."""
@@ -573,7 +659,7 @@ class GtkReadOnlyApp:
         self.labels["pairing"].set_text(f"PAIR {pairing}")
         online = snapshot.normal_video_online if self.session_mode == 'normal' else snapshot.rtmp_publisher_online
         self.labels['rtmp'].set_text(('热点 UDP ' if self.session_mode == 'normal' else 'RTMP ') + ('●' if online else '○'))
-        self.labels["media"].set_text(f"MEDIA {snapshot.media_state.upper()}")
+        self.labels["media"].set_text(snapshot.action_status or f"MEDIA {snapshot.media_state.upper()}")
         resolution = (
             f"{snapshot.video_width}×{snapshot.video_height}" if snapshot.video_width else "—"
         )
@@ -602,6 +688,8 @@ class GtkReadOnlyApp:
             return False
         Gtk, _Gdk, Gst, _GLib = self.bindings
         now_ns = time.monotonic_ns()
+        if self.focus_mark and time.monotonic()>self.focus_mark_until:
+            self.focus_mark.destroy();self.focus_mark=None
         if self.control:
             import asyncio
 
@@ -663,6 +751,7 @@ class GtkReadOnlyApp:
                     f"{'常规' if self.session_mode == 'normal' else '直播'} · {str(live['state']).upper()}  "
                     f"Y {float(live['yaw']):+.2f}  P {float(live['pitch']):+.2f}  "
                     f"SPEED {int(live['current_protocol_offset'])}"
+                    + (' · '+self.state.snapshot()[1].action_status if self.state.snapshot()[1].action_status else '')
                 )
         bus = self.pipeline.get_bus()
         while message := bus.pop_filtered(Gst.MessageType.ERROR | Gst.MessageType.EOS):
@@ -877,6 +966,8 @@ class GtkReadOnlyApp:
             self.bitrate_pad.remove_probe(self.bitrate_probe)
             if self.joystick_popover:
                 self.joystick_popover.destroy()
+            if self.focus_mark:self.focus_mark.destroy()
+            if hasattr(self,'format_popup'):self.format_popup.destroy()
             for handler in self.window_handlers:
                 self.window.disconnect(handler)
             if self.window_host:

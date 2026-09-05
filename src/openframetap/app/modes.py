@@ -23,12 +23,12 @@ def next_mode(result):
     return reason.split(':',1)[1]
 
 
-async def restore_livestream(address, output, progress=lambda _:None):
+async def restore_livestream(address, output, progress=lambda _:None, *, resolution=720):
     from openframetap.transport.dji_wifi_udp import list_rtmp_server_peer_ips
     from openframetap.video.rtmp_server import make_server
     from openframetap.workflows.pocket3_rtmp import Pocket3RtmpWorkflow
     from openframetap.workflows.prepare_recovery_session import run_prepare_recovery_session
-    if list_rtmp_server_peer_ips():
+    if resolution==720 and list_rtmp_server_peer_ips():
         return
     progress('正在准备 Pocket 直播…')
     phase = Pocket3RtmpWorkflow.load(Path('artifacts/private/pocket3-rtmp-workflow.json')).phase
@@ -38,8 +38,10 @@ async def restore_livestream(address, output, progress=lambda _:None):
     if not all((root/(n+'.json')).is_file() for n in ('prepare','wifi','stream','start')):
         raise RuntimeError('existing RTMP proposals are missing; restore them through the project wrapper')
     make_server().start()
+    from openframetap.video.formats import make_resolution_proposal
+    stream_proposal=make_resolution_proposal(root/'stream.json',output/'selected-stream.json',address=address,height=resolution)
     result, ok = await run_prepare_recovery_session(address, proposal_path=root/'prepare.json',
-        wifi_proposal_path=root/'wifi.json',stream_proposal_path=root/'stream.json',
+        wifi_proposal_path=root/'wifi.json',stream_proposal_path=stream_proposal,
         start_proposal_path=root/'start.json',output_dir=output,
         confirmation_callback=lambda _:True,passive_seconds=3,response_timeout=15,wifi_response_timeout=30,
         progress_callback=lambda event:progress({'stage2_exact_response':'正在让 Pocket 连接外部 Wi-Fi…',
@@ -62,7 +64,22 @@ async def stop_camera_livestream(address, output):
     ble=BleNormalSession(address,writer.write)
     result={'confirmed':False,'error':None}
     try:
-        await ble.open_authenticated()
+        for attempt in range(2):
+            try:
+                await ble.open_authenticated()
+                break
+            except Exception as exc:
+                # BlueZ can remove the cached Device1 during a mode handoff.
+                # Retry connection discovery once, never replay any DJI write.
+                message=str(exc).lower()
+                if attempt or ble.transport.fff5_write_count or not (
+                    'device' in message and ('not found' in message or 'unknown object' in message)
+                ):
+                    raise
+                await asyncio.wait_for(ble.transport.disconnect(),10)
+                writer.write(dict(kind='stop_connect_retry_before_any_write',error=str(exc)))
+                await asyncio.sleep(1)
+                ble=BleNormalSession(address,writer.write)
         await ble.stop_livestream()
         result['confirmed']=True
     except Exception as exc:
@@ -94,6 +111,7 @@ def run_app_modes(args, output, sanitized_output):
     sanitized_output.mkdir(parents=True, exist_ok=True)
     registry = ProcessRegistry(Path('runtime/media-processes.json'))
     current_mode = args.session_mode
+    stream_resolution=getattr(args,'stream_resolution',720)
     environment=discover_active_wayland_session().environment()
     os.environ.update(environment)
     overview_before=gnome_overview_active(environment)
@@ -124,7 +142,7 @@ def run_app_modes(args, output, sanitized_output):
             else:
                 livestream_owned=True
                 stop_attempted=False
-                host.wait(lambda:restore_livestream(args.address,output/part/'rtmp-restore',host.progress),
+                host.wait(lambda:restore_livestream(args.address,output/part/'rtmp-restore',host.progress,resolution=stream_resolution),
                           asynchronous=True,cancellable=True)
                 if host.exit_requested:
                     break
@@ -135,11 +153,18 @@ def run_app_modes(args, output, sanitized_output):
                 sanitized_output=sanitized_output/part,duration_seconds=max(1,int(deadline-time.monotonic())),
                 enable_ble=not args.no_ble,control_mode=args.control_mode,
                 session_mode=current_mode,artifact_root=output,
-                leave_livestream=current_mode=='normal' and livestream_owned,window_host=host).run()
+                leave_livestream=current_mode=='normal' and livestream_owned,window_host=host,
+                stream_resolution=stream_resolution).run()
             history.append(result)
             if current_mode=='normal' and (result.get('normal_session') or {}).get('livestream_stopped'):
                 livestream_owned=False
             mode = next_mode(result)
+            if result.get('stop_reason','').startswith('quality_switch:') and not result.get('error'):
+                selected=int(result['stop_reason'].split(':')[1])
+                if current_mode!='livestream' or selected not in (480,720,1080):
+                    raise RuntimeError('invalid monitor format switch')
+                mode='livestream'
+                stream_resolution=selected
             if livestream_owned and (mode!='normal' or host.exit_requested):
                 host.show_transition('正在停止 Pocket 侧直播…')
                 stop_attempted=True

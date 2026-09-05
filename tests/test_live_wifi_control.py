@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import time
+import pytest
 
 from openframetap.app.input import ControlInput
 from openframetap.app.state import AppStateSnapshot, StateStore
 from openframetap.control.gimbal_profile import Pocket3StickCommand
 from openframetap.control.live_wifi import LiveWifiControlSession
-from openframetap.protocol.duml import encode_duml_frame
+from openframetap.protocol.duml import encode_duml_frame, decode_duml_frame
 from openframetap.transport.dji_wifi_udp import UdpReceiveRecord
 
 
-def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch) -> None:
+@pytest.mark.parametrize('actions',[False,True])
+def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch,actions) -> None:
     class FakeTransport:
         instances = []
 
@@ -78,12 +80,28 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
     )
     state = StateStore(AppStateSnapshot(ble_connected=True, rtmp_publisher_online=True))
     session = LiveWifiControlSession(state, transport_factory=FakeTransport)
+    if actions:
+        async def send_action(self,action):
+            target,cs,ci,_=action.fields()
+            # A fast ACK can precede return from send; it must not replace the
+            # receive task handle with a numeric DUML receiver address.
+            session.observe_action_frame(decode_duml_frame(encode_duml_frame(
+                sender=target,receiver=2,sequence=123,flags=0xC0,
+                cmd_set=cs,cmd_id=ci,payload=b'\0')))
+            return 123
+        FakeTransport.send_camera_action=send_action
     session.start()
     deadline = time.monotonic() + 2
     while session.snapshot()["state"] != "armed" and time.monotonic() < deadline:
         time.sleep(0.01)
     assert session.snapshot()["state"] == "armed"
     assert session.snapshot()["keepalive_response_count"] >= 1
+    if actions:
+        deadline=time.monotonic()+2
+        while session.snapshot().get('last_action')!='query_formats' and time.monotonic()<deadline:
+            time.sleep(.01)
+        assert session.snapshot()['last_action_ok'] is True
+        time.sleep(.3)
     # A non-zero radial value starts at the configured minimum protocol speed.
     session.submit(
         ControlInput(yaw=0.001, source="test", monotonic_ns=time.monotonic_ns(), active=True)

@@ -368,6 +368,24 @@ class DjiWifiUdpTransport:
             finally:
                 self._owner_task = None
 
+    async def send_camera_action(self, action):
+        from openframetap.protocol.camera_actions import CameraAction
+        if type(action) is not CameraAction:
+            raise TypeError('only structured camera actions are accepted')
+        action.fields()
+        if self.socket is None or self.sequencer is None:
+            raise RuntimeError('camera datalink is not ready')
+        async with self._writer_lock:
+            seq=wifi_duml_wire_sequence(self.duml_sequence)
+            raw=action.encode(seq)
+            envelope=self.sequencer.build(raw)
+            await self._sendto(envelope.encode())
+            self.last_sent_transport_sequence=envelope.transport_sequence
+            self.duml_sequence=(self.duml_sequence+1)&65535
+            self.event_handler(dict(kind='camera_action_sent',name=action.name,sequence=seq,
+                                    data_hex=envelope.encode().hex(),monotonic_ns=time.monotonic_ns()))
+            return seq
+
     async def send_control_keepalive(self) -> dict:
         """Send only the exact capture-verified 04/50 control keepalive."""
 

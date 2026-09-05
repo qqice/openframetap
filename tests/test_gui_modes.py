@@ -90,7 +90,7 @@ def test_attached_controller_does_not_open_second_socket_or_require_rtmp(monkeyp
             if control.snapshot()['state']=='disabled':break
             await asyncio.sleep(0.01)
         assert not task.done() and transport.is_open
-        control.rearm_requested.set()
+        control.submit(ControlInput(yaw=.05,active=True,source='fresh_touch',monotonic_ns=time.monotonic_ns()))
         for _ in range(200):
             if control.snapshot()['state']=='armed':break
             await asyncio.sleep(0.01)
