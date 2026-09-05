@@ -16,8 +16,7 @@ assert not (old/'runtime/normal-network.json').exists(), 'pending network rollba
 manifest=new/'artifacts/migration'
 manifest.mkdir(parents=True,exist_ok=True)
 # Do not lose Windows-only runtime files or differing versions of raw evidence.
-if (new/'runtime').exists():
-    assert not (manifest/'windows-runtime').exists()
+if (new/'runtime').exists() and not (manifest/'windows-runtime').exists():
     (new/'runtime').rename(manifest/'windows-runtime')
 subprocess.run(['rsync','-a','--checksum','--backup','--backup-dir='+str(manifest/'windows-conflicts'),
                 str(old/'artifacts')+'/',str(new/'artifacts')+'/'],check=True)
@@ -25,9 +24,9 @@ subprocess.run(['rsync','-a',str(old/'runtime')+'/',str(new/'runtime')+'/'],chec
 
 # Reuse identical Linux dependency versions offline. Recreate activation/scripts
 # for the new prefix rather than copying a Windows environment or downloading.
-assert not (new/'.venv').exists()
-shutil.copytree(old/'.venv',new/'.venv',symlinks=True)
-venv.EnvBuilder(system_site_packages=True,with_pip=True).create(new/'.venv')
+if not (new/'.venv').exists():
+    shutil.copytree(old/'.venv',new/'.venv',symlinks=True)
+venv.EnvBuilder(system_site_packages=True,with_pip=True,symlinks=True).create(new/'.venv')
 for folder in (new/'.venv/bin',new/'.venv/lib/python3.12/site-packages'):
     for p in folder.iterdir():
         if p.is_file() and not p.is_symlink() and (folder.name=='bin' or p.suffix=='.pth'):

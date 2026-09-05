@@ -221,6 +221,14 @@ EOF
 
 action="${1:-}"
 case "$action" in
+  workspace-update-code)
+    [[ $# -eq 1 ]] || exit 2
+    destination='/home/qqice/Workspace/openframetap'
+    run_remote workspace-update-preflight "set -eu; test -d '$destination/.git'; test ! -e '$destination/runtime/board-canonical'; git -C '$destination' diff --quiet; git -C '$destination' diff --cached --quiet" || exit $?
+    (cd "$ROOT_DIR" && git ls-files | tar -cf - .git -T -) | \
+      "$SSH_BIN" "${SSH_OPTIONS[@]}" "$TARGET" "tar -xf - -C '$destination'"
+    exit $?
+    ;;
   workspace-upload)
     [[ $# -eq 1 ]] || exit 2
     destination='/home/qqice/Workspace/openframetap'
