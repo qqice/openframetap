@@ -73,3 +73,55 @@ Mode changes complete center/transport/network cleanup before the next session.
 STOP retains video, and the explicit enable-control button re-arms from neutral.
 See [normal-mode session](normal-mode-session.md#gui-integration-2026-09-06)
 for physical mode-cycle evidence and the exact RTMP stop profile.
+
+## Persistent window and stream lifecycle
+
+The mode selector is a two-position sliding control: **常规** on the left and
+**直播** on the right. A single `AppWindowHost` owns a full-screen transition
+surface for the whole application lifetime. Its progress page remains visible during
+control shutdown, WLAN rollback, BLE preparation and RTMP establishment. Those
+blocking operations run off the GTK thread; the spinner, elapsed time and exit
+button continue updating. The native video windows are recreated underneath the
+cover and revealed when compressed video starts arriving. This preserves the
+validated gtkwaylandsink native-surface lifecycle; trying to reparent/rebuild its
+subsurfaces in one shared video window produced a Wayland protocol error during
+testing. The transition surface stays mapped across cleanup and reconnection,
+so the desktop is not exposed between video windows.
+
+The displayed bitrate is measured by a lightweight buffer probe on the encoded
+input of `app_decoder`. It is H.264 video bitrate, independent of whether packets
+arrive over `wlan0`, wired `end0`, or a local MediaMTX relay. CPU/network-interface
+metrics remain separate diagnostic measurements.
+
+Any completed livestream session, including normal exit, duration expiry, signal
+shutdown and a switch back to normal mode, first centers its controller and closes
+the status connection. It then opens the existing authenticated BLE session and
+sends the previously validated fixed `normal_stop_livestream` command once,
+requiring Pocket's `00` response. The application window closes only after this
+cleanup. Failed stop attempts are recorded as failures and are not automatically
+repeated. The owned MediaMTX server may remain idle for the next connection.
+
+Publisher discovery excludes all local IPv4 addresses so the GUI's own RTMP reader
+cannot be mistaken for a second camera. UDP reconnect ignores old-session
+telemetry while waiting within the original timeout for the new handshake ACK.
+
+STOP now leaves the control socket and its keepalive/ACK tasks alive in a paused
+state. Explicit re-arm reuses that socket; only exit/mode shutdown closes it.
+This avoids an unnecessary new camera handshake when video is already running.
+
+### Validation, 2026-09-06
+
+- Remote suite: 315 passed, 1 skipped (optional NumPy absent). No tests ran on Windows.
+- Physical live session `control-session-gui-polish-live-20260906-0240` passed:
+  STOP/re-arm, nonzero encoded bitrate (mean 3.99 Mbps; screenshot 4.7 Mbps),
+  progressing connection UI, and final Pocket stop response `00`.
+- Final transition-cover implementation passed the three-mode GTK/MPP replay in
+  `control-session-gui-polish-replay-20260906-0253`, using saved video on ROCK 4D
+  with BLE and network operations replaced by test doubles. The same transition
+  surface survived all three native video windows.
+- Earlier live-window reuse caused a Wayland client protocol error; the final
+  implementation uses the covering-window approach described above. Its owned
+  capture processes were stopped and temporary WLAN state restored.
+- A later full wireless retry could not discover Pocket 3 over BLE (BlueZ itself
+  remained powered). Final-version full wireless round-trip validation therefore
+  remains pending device availability; replay evidence is not claimed as that proof.
