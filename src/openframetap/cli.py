@@ -175,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
     )
     app.add_argument("--duration", type=int, default=600)
+    app.add_argument("--session-mode", choices=("livestream","normal"), default="livestream")
     app.add_argument("--output", type=Path)
     app.add_argument("--sanitized-output", type=Path)
     app.add_argument("--no-ble", action="store_true")
@@ -669,7 +670,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.stop:
             try:
-                stopped = registry.stop("app", timeout=10.0)
+                stopped = registry.stop("app", timeout=70.0)
             except (PermissionError, RuntimeError) as exc:
                 print(f"APP_STOP_FAILED: {exc}")
                 return 1
@@ -696,6 +697,8 @@ def main(argv: list[str] | None = None) -> int:
                 str(sanitized_output),
                 "--control-mode",
                 args.control_mode,
+                "--session-mode",
+                args.session_mode,
             ]
             if args.no_ble:
                 child.append("--no-ble")
@@ -707,35 +710,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(json.dumps(payload, indent=2, ensure_ascii=False))
             return 0
-        from openframetap.app.runtime import GtkReadOnlyApp
-        from openframetap.devices.pocket3_livestream import load_fixed_stream_url
-        from openframetap.workflows.pocket3_preview import live_preview_spec
+        from openframetap.app.modes import run_app_modes
 
         try:
-            url = load_fixed_stream_url(args.proposal, expected_address=args.address)
-            spec = live_preview_spec(
-                url,
-                source="rtmp",
-                decoder="auto",
-                fullscreen=True,
-                profile="low-latency",
-                sink="gtkwayland",
-            )
-            payload = GtkReadOnlyApp(
-                spec,
-                address=args.address,
-                private_output=output,
-                sanitized_output=sanitized_output,
-                duration_seconds=args.duration,
-                enable_ble=not args.no_ble,
-                control_mode=args.control_mode,
-            ).run()
+            payload = run_app_modes(args, output, sanitized_output)
         except (OSError, RuntimeError, TimeoutError, ValueError, subprocess.SubprocessError) as exc:
             print(f"APP_FAILED: {exc}")
             return 1
         if not args.quiet:
             print(json.dumps(payload, indent=2, ensure_ascii=False))
-        return 0 if payload.get("error") is None and payload.get("fff5_write_count") == 0 else 1
+        return 0 if payload.get("error") is None else 1
     if args.command == "tools" and args.tools_command == "latency-pattern":
         if not 1 <= args.duration <= 600:
             print("LATENCY_PATTERN_FAILED: --duration must be 1..600 seconds")

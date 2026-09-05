@@ -189,7 +189,9 @@ Usage:
   ./scripts/remote.sh app-start [seconds]
   ./scripts/remote.sh app-start-mock [seconds]
   ./scripts/remote.sh app-start-live [seconds]
+  ./scripts/remote.sh app-start-normal [seconds]
   ./scripts/remote.sh app-status
+  ./scripts/remote.sh app-pull <app-session-or-control-session-stem>
   ./scripts/remote.sh app-stop
   ./scripts/remote.sh mock-control-test
   ./scripts/remote.sh pocket3-gimbal-test <yaw|pitch> <positive|negative> 0.05 200
@@ -217,6 +219,18 @@ EOF
 
 action="${1:-}"
 case "$action" in
+  app-pull)
+    [[ $# -eq 2 && "$2" =~ ^(app-session|control-session)-[A-Za-z0-9_-]+$ ]] || exit 2
+    pull_dir "artifacts/private/$2" "$ROOT_DIR/artifacts/private" || exit $?
+    pull_dir "artifacts/sanitized/$2" "$ROOT_DIR/artifacts/sanitized"
+    ;;
+  app-start-normal)
+    seconds="${2:-600}"
+    [[ $# -le 2 && "$seconds" =~ ^[1-9][0-9]*$ && "$seconds" -le 3600 ]] || exit 2
+    deploy || exit $?
+    stem="control-session-$(timestamp)"
+    run_remote app-start-normal "cd $REMOTE_DIR && .venv/bin/python -m openframetap app --background --session-mode normal --control-mode live --duration '$seconds' --address '$POCKET3_ADDRESS' --output 'artifacts/private/$stem' --sanitized-output 'artifacts/sanitized/$stem'"
+    ;;
   remote-test)
     [[ $# -eq 1 ]] || exit 2
     deploy || exit $?

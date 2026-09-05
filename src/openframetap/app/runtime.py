@@ -88,6 +88,9 @@ class GtkReadOnlyApp:
         duration_seconds: int,
         enable_ble: bool,
         control_mode: str = "disabled",
+        session_mode: str = "livestream",
+        artifact_root: Path | None = None,
+        leave_livestream: bool = False,
         joystick_config_path: Path = Path("config/control-ui.json"),
         registry_path: Path = Path("runtime/media-processes.json"),
     ) -> None:
@@ -105,8 +108,14 @@ class GtkReadOnlyApp:
         if control_mode not in {"disabled", "mock", "live"}:
             raise ValueError("GTK runtime control mode is invalid")
         self.control_mode = control_mode
+        if session_mode not in {'normal','livestream'}:
+            raise ValueError('invalid camera session mode')
+        self.session_mode = session_mode
+        self.artifact_root = artifact_root or self.private_output
+        self.normal_session = None
         self.registry = ProcessRegistry(registry_path)
         self.state = StateStore()
+        self.state.update(session_mode=session_mode)
         self.events = JsonlWriter(self.private_output / "events.jsonl")
         self.states = JsonlWriter(self.private_output / "state-snapshots.jsonl")
         self.metrics_writer = JsonlWriter(self.private_output / "media-metrics.jsonl")
@@ -162,6 +171,16 @@ class GtkReadOnlyApp:
                 minimum_offset=joystick.protocol_offset_min,
                 maximum_offset=joystick.protocol_offset_max,
             )
+        if session_mode == 'normal':
+            from openframetap.app.normal_session import NormalGuiSession
+            self.normal_session = NormalGuiSession(self.state, address, self.private_output/'normal',
+                control_enabled=control_mode == 'live', event_handler=self._event,
+                datagram_handler=self.sent_commands.write if self.sent_commands else self._event,
+                transition_handler=self.control_states.write if self.control_states else self._event,
+                minimum_offset=self.touch.config.protocol_offset_min if self.touch else 32,
+                maximum_offset=self.touch.config.protocol_offset_max if self.touch else 188,
+                leave_livestream=leave_livestream)
+            self.live_control = self.normal_session if control_mode == 'live' else None
 
     def _event(self, payload: dict) -> None:
         self.events.write(
@@ -277,6 +296,20 @@ class GtkReadOnlyApp:
         controls.set_margin_end(18)
         controls.set_margin_top(8)
         controls.set_margin_bottom(8)
+        selector = Gtk.ComboBoxText()
+        selector.append('livestream', '直播模式')
+        selector.append('normal', '常规模式')
+        selector.set_active_id(self.session_mode)
+        selector.set_size_request(135,48)
+        def change_mode(combo):
+            mode = combo.get_active_id()
+            if mode and mode != self.session_mode:
+                combo.set_sensitive(False)
+                self.state.update(connection_stage='switching')
+                self._request_stop('mode_switch:'+mode)
+        selector.connect('changed',change_mode)
+        self.mode_selector = selector
+        controls.pack_start(selector,False,False,0)
         if self.control_mode in {"mock", "live"}:
             joystick = Gtk.DrawingArea()
             joystick.set_size_request(
@@ -322,6 +355,10 @@ class GtkReadOnlyApp:
             stop_button.set_name("emergency-stop")
             stop_button.connect("clicked", lambda *_args: self._control_emergency())
             controls.pack_end(stop_button, False, False, 0)
+            if self.control_mode == 'live':
+                arm_button = Gtk.Button(label='启用控制')
+                arm_button.connect('clicked',lambda *_:self._control_arm())
+                controls.pack_end(arm_button,False,False,0)
         else:
             disabled = Gtk.Label(label="JOYSTICK DISABLED · READ-ONLY")
             disabled.set_name("control-disabled")
@@ -339,7 +376,8 @@ class GtkReadOnlyApp:
             b"label { color: #fff; font-size: 15px; } #control-disabled { color: #ffcc33; font-size: 20px; } "
             b"#control-mock, #control-live { background: rgba(0,0,0,0.58); border-radius: 8px; } "
             b"#control-mock { color: #55ddff; font-size: 20px; } #control-live { color: #66ff88; font-size: 20px; } #emergency-stop { background: #b00020; color: white; } "
-            b"button { font-size: 18px; padding: 10px 18px; }"
+            b"button { font-size: 18px; padding: 10px 18px; } "
+            b"#button-bar button label { color: #111; } #button-bar #emergency-stop label { color: #fff; }"
         )
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
@@ -352,6 +390,8 @@ class GtkReadOnlyApp:
         self.video_sink = video_sink
 
     def _on_key(self, _widget, event) -> bool:
+        if hasattr(self, 'mode_selector') and self.mode_selector.has_focus():
+            return False
         name = event.string.lower() if event.string else ""
         key_name = self.bindings[1].keyval_name(event.keyval).lower()
         if self.keyboard:
@@ -404,6 +444,14 @@ class GtkReadOnlyApp:
             )
             self.latest_ui_input = value
             self.live_control.submit(value)
+
+    def _control_arm(self):
+        if not self.live_control or self.live_control.snapshot()['state'] != 'disabled':
+            return
+        self.keyboard.reset()
+        self.touch.touch_cancel()
+        self.latest_ui_input = ControlInput(source='manual_arm',monotonic_ns=time.monotonic_ns())
+        self.live_control.rearm()
 
     def _mock_emergency(self) -> None:
         """Compatibility alias retained for existing mock-control tests."""
@@ -491,7 +539,8 @@ class GtkReadOnlyApp:
             "confirmation_required": "CONFIRM",
         }.get(snapshot.pairing_state, snapshot.pairing_state)
         self.labels["pairing"].set_text(f"PAIR {pairing}")
-        self.labels["rtmp"].set_text("RTMP ●" if snapshot.rtmp_publisher_online else "RTMP ○")
+        online = snapshot.normal_video_online if self.session_mode == 'normal' else snapshot.rtmp_publisher_online
+        self.labels['rtmp'].set_text(('热点 UDP ' if self.session_mode == 'normal' else 'RTMP ') + ('●' if online else '○'))
         self.labels["media"].set_text(f"MEDIA {snapshot.media_state.upper()}")
         resolution = (
             f"{snapshot.video_width}×{snapshot.video_height}" if snapshot.video_width else "—"
@@ -577,7 +626,7 @@ class GtkReadOnlyApp:
             )
             if "control" in self.labels:
                 self.labels["control"].set_text(
-                    f"LIVE · {str(live['state']).upper()}  "
+                    f"{'常规' if self.session_mode == 'normal' else '直播'} · {str(live['state']).upper()}  "
                     f"Y {float(live['yaw']):+.2f}  P {float(live['pitch']):+.2f}  "
                     f"SPEED {int(live['current_protocol_offset'])}"
                 )
@@ -603,7 +652,8 @@ class GtkReadOnlyApp:
         width, height, caps_text = _parse_caps(caps)
         self.state.update(
             media_state="running" if rendered > 0 else "starting",
-            rtmp_publisher_online=rendered > 0,
+            rtmp_publisher_online=rendered > 0 and self.session_mode == 'livestream',
+            normal_video_online=rendered > 0 and self.session_mode == 'normal',
             rendered_frames=rendered,
             dropped_frames=dropped,
             actual_fps=current_fps,
@@ -653,15 +703,18 @@ class GtkReadOnlyApp:
         self.current_caps = None
         overview_before = gnome_overview_active(env)
         overview_hidden = False
-        registry_item = self.registry.register_pid("app", os.getpid(), sys.argv)
+        registry_item = self.registry.load().get('app')
+        if registry_item is None or registry_item.pid != os.getpid():
+            registry_item = self.registry.register_pid("app", os.getpid(), sys.argv)
         (Path("runtime") / "app-last-output.txt").write_text(
-            str(self.private_output.relative_to(Path.cwd())) + "\n", encoding="utf-8"
+            str(self.artifact_root.resolve().relative_to(Path.cwd())) + "\n", encoding="utf-8"
         )
         config = {
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "address": self.address,
             "control_mode": self.control_mode,
-            "read_only": self.control_mode != "live",
+            "session_mode": self.session_mode,
+            "read_only": self.control_mode != "live" and self.session_mode != 'normal',
             "duration_seconds": self.duration_seconds,
             "pipeline": _redacted_spec(self.spec),
             "display_session": session.to_dict(),
@@ -674,14 +727,14 @@ class GtkReadOnlyApp:
         self._event(
             {
                 "kind": "app_started",
-                "read_only": self.control_mode != "live",
+                "read_only": self.control_mode != "live" and self.session_mode != 'normal',
                 "control_mode": self.control_mode,
             }
         )
-        if self.enable_ble:
+        if self.enable_ble and self.session_mode != 'normal':
             self.ble = ReadOnlyBleMonitor(self.address, self.state, event_handler=self._event)
             self.ble.start()
-        if self.live_control:
+        if self.live_control and self.session_mode != 'normal':
             self.live_control.start()
 
         def signal_stop(signum, _frame) -> None:
@@ -705,7 +758,9 @@ class GtkReadOnlyApp:
             if result == Gst.StateChangeReturn.FAILURE:
                 raise RuntimeError("GTK app pipeline failed to enter PLAYING")
             self.state.update(media_state="starting")
-            GLib.timeout_add(250, self._tick)
+            if self.normal_session:
+                self.normal_session.start(self.pipeline, Gst, self.duration_seconds)
+            tick_id = GLib.timeout_add(100, self._tick)
 
             def screenshot() -> bool:
                 self.screenshot["attempted"] = True
@@ -735,6 +790,17 @@ class GtkReadOnlyApp:
             error = f"{type(exc).__name__}: {exc}"
             self._event({"kind": "app_error", "error": error})
         finally:
+            if 'tick_id' in locals():
+                with __import__('contextlib').suppress(Exception):
+                    if GLib.MainContext.default().find_source_by_id(tick_id):
+                        GLib.source_remove(tick_id)
+            if self.normal_session:
+                try:
+                    self.normal_session.stop('app_finally')
+                    if self.normal_session.summary.get('network_cleanup_error'):
+                        error = 'normal network rollback incomplete'
+                except Exception as exc:
+                    error = error or str(exc)
             if self.live_control:
                 try:
                     self.live_control.stop("app_finally")
@@ -753,6 +819,9 @@ class GtkReadOnlyApp:
                 except Exception as exc:
                     error = error or f"control cleanup failed: {exc}"
             self.pipeline.set_state(Gst.State.NULL)
+            if self.joystick_popover:
+                self.joystick_popover.destroy()
+            self.window.destroy()
             if self.ble:
                 try:
                     self.ble.stop()
@@ -778,12 +847,17 @@ class GtkReadOnlyApp:
             "cccd_write_count": 0,
             "error": None,
         }
+        if self.normal_session:
+            ble_summary['fff5_write_count'] = self.normal_session.summary.get('fff5_write_count',0)
+            error = error or self.normal_session.summary.get('error')
         summary = {
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "actual_duration_seconds": (time.monotonic_ns() - self.started_monotonic_ns) / 1e9,
             "stop_reason": self.stop_reason,
+            "session_mode": self.session_mode,
+            "normal_session": self.normal_session.summary if self.normal_session else None,
             "error": error,
-            "read_only": self.control_mode != "live",
+            "read_only": self.control_mode != "live" and self.session_mode != 'normal',
             "fff5_write_count": ble_summary["fff5_write_count"],
             "ble": ble_summary,
             "final_state": final.to_dict(),
@@ -831,12 +905,18 @@ class GtkReadOnlyApp:
                 )
             ),
         }
-        if summary["fff5_write_count"] != 0:
+        if self.session_mode != 'normal' and summary["fff5_write_count"] != 0:
             summary["error"] = summary["error"] or "read-only app FFF5 safety invariant failed"
         (self.private_output / "summary.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
         sanitized = json.loads(json.dumps(summary))
+        if sanitized.get('control'):
+            sanitized['control'].pop('target_ip',None)
+        if sanitized.get('normal_session'):
+            sanitized['normal_session'] = {k:v for k,v in sanitized['normal_session'].items()
+                if k in {'mode','error','network_restored','success','actual_duration_seconds',
+                         'media','video','fff5_write_count','flow_ack_count','live_enable_count'}}
         if sanitized.get("final_state", {}).get("battery_provenance"):
             sanitized["final_state"]["battery_provenance"].pop("raw_value", None)
         (self.sanitized_output / "summary.json").write_text(

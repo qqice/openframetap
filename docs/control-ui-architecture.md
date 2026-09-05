@@ -64,3 +64,12 @@ There is no arbitrary two-second hold limit. A held touch remains valid through
 the GTK heartbeat. Touch-up/cancel, key-up, focus loss, STOP, exit, BLE or RTMP
 loss, write failure, and a missing input heartbeat still produce center through
 the single writer.
+
+## Camera mode integration
+
+The original GTK window now selects normal SoftAP/UDP or external-WLAN RTMP.
+Both use its named MPP decoder, gtkwaylandsink and the same joystick controller.
+Mode changes complete center/transport/network cleanup before the next session.
+STOP retains video, and the explicit enable-control button re-arms from neutral.
+See [normal-mode session](normal-mode-session.md#gui-integration-2026-09-06)
+for physical mode-cycle evidence and the exact RTMP stop profile.

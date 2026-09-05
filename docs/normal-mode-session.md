@@ -125,6 +125,56 @@ The previous WLAN and wired default route were restored. No temporary
 NetworkManager profile, password file, network rollback state or owned
 btmon/tcpdump/normal-session process remained. No packages were installed.
 
-Current product boundary: `normal-preview` is a standalone bounded fullscreen
-preview. The existing RTMP/control GUI is preserved; a GUI mode selector and
-normal-mode joystick integration are not part of this connection milestone.
+The standalone `normal-preview` remains available. GUI integration follows.
+
+## GUI integration, 2026-09-06
+
+```powershell
+& 'C:\Program Files\Git\bin\bash.exe' ./scripts/remote.sh app-start-normal 600
+```
+
+The original GTK GUI now has a **常规模式 / 直播模式** selector. Switching first
+centers control, closes the current session, restores the temporary WLAN, then
+rebuilds video. Returning to RTMP reuses the previously approved stored proposals.
+STOP preserves video; **启用控制** explicitly re-arms with zero input.
+
+Normal video, APP registration, ACK and gimbal share one ephemeral UDP socket
+and serialized writer. Both modes reuse `LiveWifiControlSession` and
+`GimbalUdpController`; attached control neither looks for RTMP nor opens a second
+socket/receiver. GTK owns `gtkwaylandsink`; the worker passes compressed AVC to
+appsrc. Input heartbeat: 100 ms; watchdog: 250 ms; control: 10 Hz; radial magnitude
+32–188; no arbitrary two-second hold limit.
+
+Returning from RTMP must stop Pocket's publisher. The fixed BLE command is
+`02 -> 08`, `02/8E`, payload `01 01 1A 00 01 02`, requiring response `00`.
+Sources agree: djictl `ddeced5422fe3a27075602d41b49e61ca60c99d8`,
+`GetMessagePayloadStopLiveStream`; node-osmo
+`cec92aec9304a5cc3dae7f7de541eef38ebb680e`, `DjiStopStreamingMessagePayload`.
+Arbitrary 02/8E remains rejected.
+
+【实机事实】GTK selector cycle **normal → livestream → normal** passed in
+`control-session-gui-cycle-20260906-0059`. Each mode presented video, reached
+ARMED, centered on STOP and kept rendering after STOP. Subsequent
+`control-session-gui-rearm-20260906-0103` verified normal-mode
+STOP → re-arm → STOP without opening another camera connection.
+
+【实机事实】Integration corrected duplicate app-PID registration, separated
+the Wi-Fi association timeout (30 s) from post-stream observation (3 s), and
+added the fixed RTMP stop before rejoining Pocket SoftAP. Both directions
+completed without reboot or manual recovery.
+
+【统计观察】Remote suite: 308 passed, 1 skipped (optional NumPy absent). Mock
+tests exercise nonzero input and final center. Physical GUI tests intentionally
+sent center only; manual drag feel remains an operator check.
+
+One `control-session-*` root holds the mode subdirectories. `app-stop` stops and
+pulls the latest session; `app-pull <stem>` archives a named session. All tests,
+decoding and analysis run on ROCK 4D, not Windows.
+
+Final archive verification on ROCK 4D passed for 50 files in the round-trip
+session and 17 files in the re-arm session. Each of the three round-trip modes
+ended disabled with zero non-center packets and no control fault; rendered-frame
+counts were 120 / 115 / 122. Both normal sessions restored the prior WLAN. The
+re-arm session rendered 198 frames. All used the explicit MPP + gtkwaylandsink
+pipeline. No temporary profile, rollback file, capture process or GUI process
+remained after validation. Final targeted remote checks: 21 passed.
