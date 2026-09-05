@@ -22,7 +22,7 @@ def main():
         control=app.live_control.snapshot()
         if control['state']=='fault':app._request_stop('validation_fault');return False
         if state.rendered_frames<90:return True
-        if app not in focus_sent and control.get('last_action')=='query_formats':
+        if app not in focus_sent and control['state']=='armed':
             app._camera_action('focus',.5,.5);focus_sent.add(app);times[app]=time.monotonic()
         if app in focus_sent and (control.get('last_action')=='focus' or time.monotonic()-times[app]>4):
             observations.append(dict(mode=app.session_mode,requested_height=app.stream_resolution,

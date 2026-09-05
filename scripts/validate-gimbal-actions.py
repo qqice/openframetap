@@ -36,7 +36,7 @@ def main():
         if control['state']=='fault':app._request_stop('validation_fault');return False
         if app.state.snapshot()[1].rendered_frames<90:return True
         if options.recenter_displaced and not entry.get('positioned'):
-            if control.get('last_action')!='query_formats':return True
+            if control['state'] not in ('armed','active'):return True
             from openframetap.app.input import ControlInput
             if 'displace_at' not in entry:
                 entry['displace_at']=time.monotonic()
@@ -48,7 +48,7 @@ def main():
             entry.update(positioned=True,at=time.monotonic()-4)
         name=('recenter','flip')[entry['index']]
         if not entry['sent']:
-            if control.get('last_action') not in ('query_formats','recenter'):return True
+            if control['state'] not in ('armed','active'):return True
             # Wait well beyond the two-second cooldown through either facade.
             if time.monotonic()-entry['at']<4:return True
             entry['before']=sample(app)

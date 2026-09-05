@@ -97,8 +97,10 @@ def test_live_stop_is_prioritized_and_finishes_with_redundant_center(monkeypatch
     assert session.snapshot()["state"] == "armed"
     assert session.snapshot()["keepalive_response_count"] >= 1
     if actions:
+        from openframetap.protocol.camera_actions import CameraAction
+        assert session.request_action(CameraAction('focus',.5,.5))
         deadline=time.monotonic()+2
-        while session.snapshot().get('last_action')!='query_formats' and time.monotonic()<deadline:
+        while session.snapshot().get('last_action')!='focus' and time.monotonic()<deadline:
             time.sleep(.01)
         assert session.snapshot()['last_action_ok'] is True
         time.sleep(.3)

@@ -414,8 +414,12 @@ class GtkReadOnlyApp:
         self.decoder = decoder
         self.video_sink = video_sink
         self.video_widget=widget
-        tap=Gtk.GestureMultiPress.new(widget)
+        # Observe at the window capture phase, before the native video widget
+        # turns input into GStreamer navigation events. Do not claim the gesture:
+        # joystick and buttons must still receive their own events.
+        tap=Gtk.GestureMultiPress.new(window)
         tap.set_touch_only(False)
+        tap.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         tap.connect('released',self._on_video_tap)
         tap.connect('pressed',lambda _,count,x,y:setattr(self,'video_press',(x,y,time.monotonic())))
         self.video_tap=tap
@@ -509,31 +513,54 @@ class GtkReadOnlyApp:
         if self.live_control:
             accepted=self.live_control.request_action(action)
             self.state.update(action_status='正在执行…' if accepted else '请等待当前操作完成')
+            return accepted
         else:
             self._event(dict(kind='mock_camera_action',name=name,x=x,y=y))
-            self.state.update(action_status='模拟操作')
+            self.state.update(action_status='模拟操作' if self.control else '只读模式：未发送操作')
+            return bool(self.control)
 
     def _on_video_tap(self,gesture,count,x,y):
         if count!=1 or not self.content_shown and self.window_host:return
         import math
         start=getattr(self,'video_press',None)
+        self.video_press=None
         if not start or time.monotonic()-start[2]>0.6 or math.hypot(x-start[0],y-start[1])>12:return
+        location=self.window.translate_coordinates(self.video_widget,int(x),int(y))
+        if location is None:return
+        x,y=location
         from openframetap.protocol.camera_actions import focus_point
         _,s=self.state.snapshot()
         allocation=self.video_widget.get_allocation()
+        if not (0<=x<allocation.width and 0<=y<allocation.height):return
         if self.touch and x<self.touch.config.overlay_size+40 and y>allocation.height-self.touch.config.overlay_size-25:return
         point=focus_point(x,y,allocation.width,allocation.height,s.video_width or 0,s.video_height or 0)
-        if point is None:return
-        self._camera_action('focus',*point)
+        self._event(dict(kind='video_tap_received',widget_x=x,widget_y=y,normalized=point))
+        if point is None:
+            self.state.update(action_status='请点视频画面，黑边不可对焦')
+            self._show_focus_marker(x,y,'黑边区域','#ff6655')
+            return
+        requested=time.monotonic_ns()
+        accepted=self._camera_action('focus',*point)
+        self._show_focus_marker(x,y,'对焦中…' if accepted else '当前不可对焦', '#ffdc55' if accepted else '#ff6655')
+        self.focus_request_ns=requested if accepted else None
+
+    def _show_focus_marker(self,x,y,text,color):
         Gtk,Gdk,_,_=self.bindings
         if self.focus_mark:self.focus_mark.destroy()
-        # Separate popup surface is required above gtkwaylandsink's native surface.
-        mark=Gtk.Popover.new(self.video_widget);mark.set_modal(False)
-        label=Gtk.Label(label='＋');label.set_size_request(40,40);mark.add(label)
+        # Popup gets a native Wayland surface above hardware-decoded video.
+        mark=Gtk.Popover.new(self.video_widget);mark.set_modal(False);mark.set_transitions_enabled(False)
+        mark.set_name('focus-feedback')
+        box=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=8)
+        box.set_border_width(6)
+        cross=Gtk.Label();cross.set_markup(f'<span foreground="{color}" size="32000">⌖</span>')
+        label=Gtk.Label();label.set_markup(f'<span foreground="{color}">{text}</span>')
+        box.pack_start(cross,False,False,0);box.pack_start(label,False,False,0);mark.add(box)
         rectangle=Gdk.Rectangle();rectangle.x=int(x);rectangle.y=int(y);rectangle.width=1;rectangle.height=1
         mark.set_pointing_to(rectangle);mark.set_position(Gtk.PositionType.TOP)
         mark.show_all();mark.popup()
-        self.focus_mark=mark;self.focus_mark_until=time.monotonic()+0.8
+        self.focus_label=label;self.focus_mark=mark;self.focus_mark_until=time.monotonic()+3
+        self.focus_request_ns=None
+        self._event(dict(kind='focus_marker_shown',widget_x=x,widget_y=y,text=text))
 
     def _show_formats(self,button):
         Gtk,_,_,_=self.bindings
@@ -558,16 +585,6 @@ class GtkReadOnlyApp:
         else:
             box.pack_start(Gtk.Label(label='当前已验证：H.264 720p\n更多图传编码与分辨率尚无已验证查询协议'),False,False,0)
         box.pack_start(Gtk.Label(label='HEVC / MJPEG 不作为未经验证的选项开放'),False,False,0)
-        query=Gtk.Button(label='读取录像规格（非图传格式）')
-        query.connect('clicked',lambda *_:self._camera_action('query_formats'))
-        box.pack_start(query,False,False,0)
-        if s.recording_capability_raw:
-            from openframetap.video.formats import parse_recording_capability
-            entries=parse_recording_capability(bytes.fromhex(s.recording_capability_raw))
-            detail=f'收到 {len(entries)} 档录像规格；不据此切换图传' if entries else '未解析的录像规格回复已保存'
-        else:
-            detail='尚未收到录像规格表；图传选项以实机验证为准'
-        box.pack_start(Gtk.Label(label=detail),False,False,0)
         popup.add(box);popup.show_all();popup.popup()
         self.format_popup=popup
 
@@ -732,6 +749,10 @@ class GtkReadOnlyApp:
                 self.latest_ui_input = refreshed
                 self.live_control.submit(refreshed)
             live = self.live_control.snapshot()
+            if self.focus_mark and getattr(self,'focus_request_ns',None) and live.get('last_action')=='focus' and live.get('last_action_result_ns',0)>=self.focus_request_ns:
+                ok=live.get('last_action_ok')
+                self.focus_label.set_markup('<span foreground="'+('#70ee99' if ok else '#ff6655')+'">'+('已应答' if ok else '未应答')+'</span>')
+                self.focus_request_ns=None
             last_age = (
                 (now_ns - live["last_command_ns"]) / 1e6
                 if live.get("last_command_ns") is not None

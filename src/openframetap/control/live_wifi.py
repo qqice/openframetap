@@ -278,9 +278,6 @@ class LiveWifiControlSession:
                 last_center_ns=controller.last_center_ns,
             )
             self._event("live_control_armed", target_ip=target_ip, local_port=transport.local_port)
-            from openframetap.protocol.camera_actions import CameraAction
-            if hasattr(transport,'send_camera_action'):
-                self.request_action(CameraAction('query_formats'))
 
             while not self._stop.is_set():
                 priority_stop: ControlInput | None = None
@@ -361,7 +358,7 @@ class LiveWifiControlSession:
                         self.state.update(action_status=(('录像规格查询已应答' if action.name=='query_formats' else '指令已确认') if ok else '相机未确认该操作'))
                         self._event('camera_action_result',name=action.name,ok=ok,
                                     response=response.to_dict() if response else None)
-                        self._set(last_action=action.name,last_action_ok=ok)
+                        self._set(last_action=action.name,last_action_ok=ok,last_action_result_ns=time.monotonic_ns())
                         self._action_pending=self._action_response=None
                         self._action_cooldown=time.monotonic()+(2 if action.name in ('flip','recenter') else 0.2)
                     await asyncio.sleep(0.02)
