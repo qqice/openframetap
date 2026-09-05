@@ -1,5 +1,66 @@
 # Touch camera actions and monitor output
 
+## Focus correction and query UI removal — 2026-09-06
+
+The recording-capability button, accompanying explanation, and automatic
+startup subscription have been removed. Historical protocol fixtures remain
+readable, but the GUI no longer queries `camcap_video_format`.
+
+The original focus gesture was attached to the native `gtkwaylandsink` widget
+at its default propagation phase. It is now attached to the application window
+in **GTK capture phase**, with explicit window-to-video coordinate translation.
+It observes without claiming gestures, so joystick and button input still work.
+Dragging, long pressing, button rows and the joystick region do not send focus.
+Taps on letterboxes show a clear "black border" indication instead of silently
+doing nothing. The marker is a native Wayland popover above the video, displayed
+for three seconds: yellow pending, red unavailable/unacknowledged, green text
+for command acknowledgment. An ACK is not presented as a measured AF lock.
+
+【参考实现结论】GStreamer's
+[GTK base widget](https://github.com/GStreamer/gstreamer/blob/1.24/subprojects/gst-plugins-bad/ext/gtk/gtkgstbasewidget.c)
+implements its own mouse/touch navigation handling. Capturing at the ancestor
+window avoids relying on the native video widget's bubbling behavior.
+OpenPocketCine's [tap-focus sequence](https://openpocketcine.app/docs/protocol/commands/)
+has additional AE writes; those were **not** introduced, because the existing
+02/30 region command demonstrably refocuses this Pocket 3 once clicks reach it.
+
+【实机事实】`control-session-focus-point-20260906-0426` injected three pointer
+clicks via GDK's event queue (not direct calls to the protocol/UI action handler):
+near at picture x=1/3, far at x=11/12, then near again, all y=1/2. All three
+traversed GTK capture, coordinate mapping, marker creation, the single UDP writer,
+and received matching 02/30 status-00 replies. No gimbal, AE, recording, or
+recording-capability command was sent. The stream stayed on MPP/gtkwaylandsink.
+
+【统计观察】Fixed ROIs in the DSI screenshots showed this Laplacian variance
+(a scene-dependent sharpness indicator; higher is sharper):
+
+| Click | Computer text ROI | Distant room ROI |
+|---|---:|---:|
+| Near | 3724.56 | 33.20 |
+| Far | 16.02 | 648.73 |
+| Near again | 3709.81 | 32.84 |
+
+Exposure-normalized values reverse in the same direction. Inspection of the
+full PNGs confirms the user's criterion: distant room sharp/text blurred, then
+text sharp/room blurred. The final focus was returned to the computer screen.
+Original screenshots, ROI crops, raw commands and JSON measurements are private
+evidence; image processing ran only on ROCK 4D using existing GdkPixbuf and the
+Python standard library. No new dependency or AE/metering command was required.
+
+【捕获推断】This supports an input-delivery defect, not an ineffective 02/30
+payload for this camera state. The previous ACK-only center test bypassed real
+GUI events and could not establish user-visible tap behavior. This new test
+uses GDK pointer events; an actual finger on the DSI digitizer is still a
+distinct manual acceptance check, although both use the same GTK controller.
+
+Final remote suite: **327 passed, 1 skipped** (existing optional-NumPy latency
+test). All **36** private evidence files passed SHA-256 verification on ROCK 4D
+and were retrieved locally. The session logged exactly three focus actions and
+zero recording-capability queries. The application and camera RTMP publisher
+were stopped cleanly; no capture process or owned temporary WLAN state remained.
+
+The sections below retain the preceding implementation/verification history.
+
 ## Controls
 
 The joystick starts on a fresh gesture and stops on release/cancel. The old
