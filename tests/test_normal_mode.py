@@ -185,3 +185,20 @@ def test_online_drops_conflicts_lengths_and_expires_incomplete_frames():
     asm.feed(fragment(3,0,2,data),1.1)
     asm.feed(fragment(4,0,2,data),2)
     assert asm.stats['incomplete_dropped'] == 1
+
+
+def test_large_idr_continues_across_63_fragment_group_and_frame_id_wrap():
+    picture=bytes.fromhex('0000000165')+b'x'*(98048-5)
+    unit=bytes.fromhex('000001ff')+len(picture).to_bytes(4,'little')+bytes(8)+picture
+    assembler=OnlineMediaAssembler()
+    cut=63*1452
+    for i in range(63):
+        assert assembler.feed(fragment(255,i,63,unit[i*1452:(i+1)*1452]),1+i/10000) is None
+    remaining=unit[cut:]
+    count=(len(remaining)+1451)//1452
+    result=None
+    for i in range(count):
+        result=assembler.feed(fragment(0,i,count,remaining[i*1452:(i+1)*1452]),1.01+i/10000)
+    assert result[0]==picture
+    assert assembler.stats['continued_access_units']==1
+    assert assembler.continuation is None

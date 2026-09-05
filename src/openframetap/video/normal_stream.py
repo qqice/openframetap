@@ -12,10 +12,14 @@ class OnlineMediaAssembler:
         self.pending = {}
         self.finished = {}
         self.stats = Counter()
+        self.continuation = None
 
     def feed(self, data: bytes, now: float):
         fragment = DjiWifiMediaFragment.parse(data)
         self.stats['fragments'] += 1
+        if self.continuation and now-self.continuation['time'] > 0.5:
+            self.continuation = None
+            self.stats['continuation_expired'] += 1
         for key, item in list(self.pending.items()):
             if now - item['time'] > 0.5:
                 del self.pending[key]
@@ -46,12 +50,36 @@ class OnlineMediaAssembler:
         del self.pending[key]
         self.finished[key] = now
         raw = b''.join(parts[n] for n in range(item['count']))
+        # Pocket 3 splits large IDRs across consecutive frame-id groups of
+        # at most 63 UDP fragments. Only the first group has the 16-byte
+        # access-unit header (captured 98,048 and 110,676-byte IDRs).
+        if self.continuation:
+            held = self.continuation
+            self.continuation = None
+            if key == held['next_id'] and not raw.startswith(b'\0\0\1\xff'):
+                combined = held['data'] + raw
+                if len(combined) == held['length']:
+                    self.stats['access_units'] += 1
+                    self.stats['continued_access_units'] += 1
+                    return combined, held['timestamp']
+                if len(combined) < held['length'] and item['count']==63 and all(len(p)==1452 for p in parts.values()):
+                    held.update(data=combined,next_id=(key+1)&255)
+                    self.continuation = held
+                    return None
+                self.stats['length_mismatch'] += 1
+                return None
+            self.stats['continuation_gap'] += 1
         try:
             header = DjiWifiMediaAccessUnitHeader.parse(raw)
         except ValueError:
             self.stats['invalid_header'] += 1
             return None
         if len(raw) - 16 != header.declared_length:
+            if (len(raw)-16 < header.declared_length <= 2_000_000 and item['count']==63
+                    and all(len(p)==1452 for p in parts.values())):
+                self.continuation = dict(data=raw[16:],length=header.declared_length,
+                    timestamp=header.timestamp_ms_candidate,next_id=(key+1)&255,time=now)
+                return None
             self.stats['length_mismatch'] += 1
             return None
         self.stats['access_units'] += 1

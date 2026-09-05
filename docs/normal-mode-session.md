@@ -178,3 +178,11 @@ counts were 120 / 115 / 122. Both normal sessions restored the prior WLAN. The
 re-arm session rendered 198 frames. All used the explicit MPP + gtkwaylandsink
 pipeline. No temporary profile, rollback file, capture process or GUI process
 remained after validation. Final targeted remote checks: 21 passed.
+
+A final fresh connection exposed large-IDR segmentation: captured IDRs of
+98,048 and 110,676 bytes span successive frame-id groups, the first containing
+63 full 1,452-byte payloads. The online assembler now joins consecutive groups
+up to the exact AU length, bounded to 2 MB / 500 ms; missing or mismatched
+continuations remain dropped. Replay of the formerly black session restored both
+IDRs with zero length/header errors. The corrected GUI passed the physical
+STOP/re-arm check in `control-session-gui-large-idr-20260906-0118`.

@@ -20,6 +20,13 @@ OpenFrameTap now treats these as separate future session profiles:
 Network association, camera control, and a live UDP receiver remain outside
 this offline extraction phase.
 
+Subsequent implementation: see [normal-mode session](normal-mode-session.md).
+Live capture on 2026-09-06 refined the byte-16 interpretation: it identifies a
+fragment group, not necessarily a complete access unit. Large IDRs can continue
+in the next group after 63 full fragments. The online receiver now joins these
+groups using the declared AU length. The historical offline results below remain
+unchanged; their conservative extractor dropped an oversized continued unit.
+
 ## Capture-confirmed packet layout
 
 The dominant downstream flow is `WhType 02`. Its first 20 bytes contain the
