@@ -7,14 +7,21 @@ import threading
 
 
 class JsonlWriter:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, max_bytes: int = 0) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._stream = path.open("w", encoding="utf-8", newline="\n")
         self._lock = threading.Lock()
+        self.max_bytes=max_bytes
 
     def write(self, payload: dict) -> None:
         with self._lock:
+            if self.max_bytes and self._stream.tell()>=self.max_bytes:
+                self._stream.close()
+                previous=self.path.with_name(self.path.name+'.1')
+                previous.replace(self.path.with_name(self.path.name+'.2')) if previous.exists() else None
+                self.path.replace(previous)
+                self._stream=self.path.open('w',encoding='utf-8',newline='\n')
             self._stream.write(json.dumps(payload, sort_keys=True, ensure_ascii=False) + "\n")
             self._stream.flush()
 
@@ -32,4 +39,3 @@ def write_manifest(directory: Path) -> None:
         for path in paths:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             stream.write(f"{digest}  {path.relative_to(directory).as_posix()}\n")
-

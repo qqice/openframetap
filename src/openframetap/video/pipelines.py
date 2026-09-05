@@ -251,7 +251,9 @@ def live_pipeline(
         *source_tokens,
         "!",
         "queue",
-        *params["queue"],
+        "name=encoded_queue",
+        "max-size-buffers=0", "max-size-bytes=4194304", "max-size-time=200000000",
+        "leaky=no",
         "!",
         "h264parse",
         "config-interval=-1",
@@ -260,6 +262,9 @@ def live_pipeline(
         "!",
         decoder,
         "name=app_decoder" if sink == "gtkwayland" else "name=preview_decoder",
+        "!",
+        # Drop only independent decoded pictures, never H.264 reference frames.
+        "queue", "name=display_queue", *params["queue"], "max-size-bytes=0", "max-size-time=0",
         "!",
         *_sink_tokens(sink, fullscreen=fullscreen, sync=params["sink_sync"]),
     )

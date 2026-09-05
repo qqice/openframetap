@@ -153,6 +153,7 @@ class BluezBleTransport:
         return value
 
     async def connect(self) -> None:
+        self._disconnect_requested = False
         try:
             from bleak import BleakClient
         except ImportError as exc:
@@ -357,22 +358,32 @@ class BluezBleTransport:
         try:
             if self._subscribed and self._client.is_connected:
                 self._cccd_write_count += 1
-                await self._client.stop_notify(self._notification_characteristic)
+                notify_ok=True
+                try:
+                    await asyncio.wait_for(self._client.stop_notify(self._notification_characteristic),2)
+                except Exception as exc:
+                    notify_ok=False
+                    self.event_handler(dict(event='fff4_unsubscribe_warning',error=str(exc)))
                 self._subscribed = False
                 self.event_handler(
                     {
                         "wall_timestamp": utc_now(),
                         "monotonic_ns": time.monotonic_ns(),
-                        "event": "fff4_unsubscribed",
+                        "event": "fff4_unsubscribed" if notify_ok else "fff4_unsubscribe_incomplete",
                         "cccd_write_attempted": True,
                         "cccd_write_count": self._cccd_write_count,
                         "fff5_write_attempted": False,
                     }
                 )
-            if self._client.is_connected:
-                await self._client.disconnect()
         finally:
-            self.event_handler(
+            # Even a failed/timed-out StopNotify must not leave our ACL connected.
+            try:
+                if self._client.is_connected:
+                    await asyncio.wait_for(self._client.disconnect(),5)
+                if self.is_connected:
+                    raise RuntimeError('owned BLE connection remains connected after disconnect')
+            finally:
+                self.event_handler(
                 {
                     "wall_timestamp": utc_now(),
                     "monotonic_ns": time.monotonic_ns(),

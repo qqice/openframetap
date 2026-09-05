@@ -174,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--address",
         default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address),
     )
-    app.add_argument("--duration", type=int, default=600)
+    app.add_argument("--duration", type=int, default=600, help="seconds; 0 runs until explicit exit")
     app.add_argument("--session-mode", choices=("livestream","normal"), default="livestream")
     app.add_argument('--stream-resolution',type=int,choices=(480,720,1080),default=720)
     app.add_argument("--output", type=Path)

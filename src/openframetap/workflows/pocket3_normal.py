@@ -53,28 +53,33 @@ class BleNormalSession:
                 self.event(dict(kind='ble_frame', **frame.to_dict()))
 
     async def send(self, name, *, reply=True, timeout=5):
-        async with self.send_lock:
-            seq = self.sequence
-            self.sequence = (seq + 1) & 65535
-            if name == 'set_pairing_pin':
-                raw = build_set_pairing_pin_frame(sequence=seq)
-                command = PAIRING_COMMANDS[name]
-            else:
-                raw = build_normal_frame(name, seq)
-                command = NORMAL_COMMANDS[name]
-            future = asyncio.get_running_loop().create_future()
-            key = (command.cmd_set, command.cmd_id, seq)
-            if reply:
-                self.pending[key] = (command.receiver, future)
-            try:
+        key=None
+        try:
+            async with self.send_lock:
+                seq = self.sequence
+                self.sequence = (seq + 1) & 65535
+                if name == 'set_pairing_pin':
+                    raw = build_set_pairing_pin_frame(sequence=seq)
+                    command = PAIRING_COMMANDS[name]
+                else:
+                    raw = build_normal_frame(name, seq)
+                    command = NORMAL_COMMANDS[name]
+                future = asyncio.get_running_loop().create_future()
+                key = (command.cmd_set, command.cmd_id, seq)
+                if reply:
+                    self.pending[key] = (command.receiver, future)
                 authorization = SendAuthorization.single_command(
                     name, purpose='Pocket 3 normal-view connection',
                     approval_reference='owner normal-mode implementation request 2026-09-05')
                 await asyncio.wait_for(self.transport.send_frame(raw, command=command, authorization=authorization), 5)
-                if reply:
-                    return await asyncio.wait_for(future, timeout)
-            finally:
-                self.pending.pop(key, None)
+            # Hold only the writer lock, not the response wait. A Wi-Fi wakeup
+            # reply must not block the application-presence heartbeat it needs.
+            if reply:
+                try:return await asyncio.wait_for(future, timeout)
+                except asyncio.TimeoutError as exc:
+                    raise TimeoutError(f'{name} response timed out after {timeout}s') from exc
+        finally:
+            if key is not None:self.pending.pop(key, None)
 
     async def open_authenticated(self):
         await self.transport.connect()
@@ -97,11 +102,24 @@ class BleNormalSession:
         if leave_livestream:
             await self.stop_livestream()
         # Pocket 3's 53/10 is E0 in Osmosis; its AP comes up via 00/2B.
-        await asyncio.sleep(0.6)
-        ssid = parse_wifi_string(await self.send('normal_get_ssid'))
-        password = parse_wifi_string(await self.send('normal_get_password'), password=True)
-        self.event(dict(kind='credentials_read', ssid_length=len(ssid.encode()), password_length=len(password)))
-        return SoftAPCredentials(ssid, password)
+        task=asyncio.create_task(self.heartbeat(),name='credential-wakeup-heartbeat')
+        try:
+            await asyncio.sleep(0.6)
+            # At most one read-only SSID retry, without reconnecting or pairing.
+            for attempt in range(2):
+                try:
+                    ssid = parse_wifi_string(await self.send('normal_get_ssid'))
+                    break
+                except TimeoutError:
+                    if attempt:raise
+                    self.event(dict(kind='ssid_read_retry_after_radio_wakeup',attempt=2))
+                    await asyncio.sleep(1)
+            password = parse_wifi_string(await self.send('normal_get_password'), password=True)
+            self.event(dict(kind='credentials_read', ssid_length=len(ssid.encode()), password_length=len(password)))
+            return SoftAPCredentials(ssid, password)
+        finally:
+            task.cancel()
+            await asyncio.gather(task,return_exceptions=True)
 
     async def heartbeat(self):
         while True:
@@ -112,8 +130,8 @@ class BleNormalSession:
 async def run_normal_session(address: str, *, seconds: int, output: Path, display=True,
                              managed=False, player_override=None, state_store=None,
                              control_session=None, stop_event=None, leave_livestream=False):
-    if not 1 <= seconds <= 3600:
-        raise ValueError('normal-mode duration must be 1..3600 seconds')
+    if not 0 <= seconds <= 86400:
+        raise ValueError('normal-mode duration must be 0 (unlimited) or 1..86400 seconds')
     output = require_private_directory(output)
     if any(output.iterdir()):
         raise ValueError('normal-mode evidence directory must be empty')
@@ -128,11 +146,11 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
     except OSError:
         lock.close()
         raise RuntimeError('another normal-mode session owns the device')
-    log = (output / 'events.jsonl').open('w', encoding='utf-8')
+    from openframetap.app.artifacts import JsonlWriter
+    log = JsonlWriter(output/'events.jsonl',max_bytes=8*1024*1024 if not seconds else 0)
     def event(payload):
-        log.write(json.dumps({'wall_time_utc': datetime.now(timezone.utc).isoformat(),
-                              'monotonic_ns': time.monotonic_ns(), **payload}) + '\n')
-        log.flush()
+        log.write({'wall_time_utc': datetime.now(timezone.utc).isoformat(),
+                   'monotonic_ns': time.monotonic_ns(), **payload})
         if control_session and payload.get('kind') in ('stick_center','stick_non_center','control_keepalive','camera_action_sent'):
             control_session.datagram_handler(payload)
         if state_store and payload.get('event') in ('disconnected_callback','disconnect_complete'):
@@ -169,7 +187,7 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
             ('btmon', 'btmon.txt', ('btmon', '-w', str(output / 'capture.btsnoop'))),
             ('tcpdump', 'tcpdump.txt', ('tcpdump', '-i', 'wlan0', '-s', '0', '-U', '-w',
                                       str(output / 'capture.pcap'), 'host', '192.168.2.1', 'and', 'udp', 'port', '9004')),
-        ):
+        ) if seconds else ():
             stream = (output / filename).open('w')
             capture_logs.append(stream)
             proc = await asyncio.create_subprocess_exec('sudo','-n','timeout','--signal=INT',
@@ -204,7 +222,9 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         counts = Counter()
         registered = asyncio.Event()
         control_ready = asyncio.Event()
-        video_file = (output / 'video.h264').open('wb')
+        # An unlimited desktop monitor is not an unlimited video recorder.
+        video_file = (output / 'video.h264').open('wb') if seconds else open(os.devnull,'wb')
+        summary['packet_and_video_capture_enabled']=bool(seconds)
         async def receive():
             try:
                 while True:
@@ -274,7 +294,7 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
                     event(dict(kind='normal_control_fault', error=str(exc)))
             control_task = asyncio.create_task(control_worker())
         stage = 'monitoring'
-        deadline = time.monotonic() + seconds
+        deadline = time.monotonic() + seconds if seconds else float('inf')
         listening_started = time.monotonic()
         first_picture = None
         screenshot_done = False

@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections import deque
 from typing import Any
 
 from openframetap.app.artifacts import JsonlWriter, write_manifest
@@ -96,8 +97,8 @@ class GtkReadOnlyApp:
         joystick_config_path: Path = Path("config/control-ui.json"),
         registry_path: Path = Path("runtime/media-processes.json"),
     ) -> None:
-        if not 1 <= duration_seconds <= 86400:
-            raise ValueError("app duration must be 1..86400 seconds")
+        if not 0 <= duration_seconds <= 86400:
+            raise ValueError("app duration must be 0 (unlimited) or 1..86400 seconds")
         self.spec = spec
         self.address = address
         self.private_output = require_private_directory(private_output)
@@ -123,14 +124,15 @@ class GtkReadOnlyApp:
         self.content_shown=False
         from openframetap.video.bitrate import EncodedBitrate
         self.video_bitrate=EncodedBitrate()
-        self.video_bitrate_samples=[]
+        self.video_bitrate_samples=deque(maxlen=3600) if not duration_seconds else []
         self.registry = ProcessRegistry(registry_path)
         self.state = StateStore()
         self.state.update(session_mode=session_mode)
-        self.events = JsonlWriter(self.private_output / "events.jsonl")
-        self.states = JsonlWriter(self.private_output / "state-snapshots.jsonl")
-        self.metrics_writer = JsonlWriter(self.private_output / "media-metrics.jsonl")
-        self.metric_samples = []
+        writer=lambda path:JsonlWriter(path,max_bytes=8*1024*1024 if not duration_seconds else 0)
+        self.events = writer(self.private_output / "events.jsonl")
+        self.states = writer(self.private_output / "state-snapshots.jsonl")
+        self.metrics_writer = writer(self.private_output / "media-metrics.jsonl")
+        self.metric_samples = deque(maxlen=3600) if not duration_seconds else []
         self.ble: ReadOnlyBleMonitor | None = None
         self.pipeline = None
         self.window = None
@@ -162,9 +164,9 @@ class GtkReadOnlyApp:
             joystick = JoystickConfig.load(joystick_config_path)
             self.keyboard = KeyboardInput(maximum_output=joystick.keyboard_output)
             self.touch = TouchJoystickInput(joystick)
-            self.input_events = JsonlWriter(self.private_output / "input-events.jsonl")
-            self.sent_commands = JsonlWriter(self.private_output / "sent-commands.jsonl")
-            self.control_states = JsonlWriter(self.private_output / "control-state.jsonl")
+            self.input_events = writer(self.private_output / "input-events.jsonl")
+            self.sent_commands = writer(self.private_output / "sent-commands.jsonl")
+            self.control_states = writer(self.private_output / "control-state.jsonl")
         if control_mode == "mock":
             self.mock_sink = MockCommandSink()
             self.control = FailClosedController(
@@ -840,7 +842,7 @@ class GtkReadOnlyApp:
         if changed:
             self.revision, snapshot = changed
             self._update_labels(snapshot)
-        if now_ns - self.started_monotonic_ns >= self.duration_seconds * 1_000_000_000:
+        if self.duration_seconds and now_ns - self.started_monotonic_ns >= self.duration_seconds * 1_000_000_000:
             self._request_stop("duration")
             return False
         return self.stop_reason == "unknown"

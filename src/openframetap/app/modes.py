@@ -119,7 +119,8 @@ def run_app_modes(args, output, sanitized_output):
         set_gnome_overview_active(False,environment)
     host=AppWindowHost(_load_gtk_gst(),environment)
     history = []
-    deadline = time.monotonic()+args.duration
+    if not 0<=args.duration<=86400:raise ValueError('duration must be 0..86400')
+    deadline = time.monotonic()+args.duration if args.duration else float('inf')
     def interrupt(signum, frame):
         host.request_exit()
     previous = signal.signal(signal.SIGTERM,interrupt)
@@ -150,7 +151,7 @@ def run_app_modes(args, output, sanitized_output):
                 spec = live_preview_spec(url,source='rtmp',decoder='auto',fullscreen=True,
                                          profile='low-latency',sink='gtkwayland')
             result = GtkReadOnlyApp(spec,address=args.address,private_output=output/part,
-                sanitized_output=sanitized_output/part,duration_seconds=max(1,int(deadline-time.monotonic())),
+                sanitized_output=sanitized_output/part,duration_seconds=max(1,int(deadline-time.monotonic())) if args.duration else 0,
                 enable_ble=not args.no_ble,control_mode=args.control_mode,
                 session_mode=current_mode,artifact_root=output,
                 leave_livestream=current_mode=='normal' and livestream_owned,window_host=host,
