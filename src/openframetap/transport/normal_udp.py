@@ -1,6 +1,7 @@
 """Normal-view UDP session. Only one profile-validated enable write is exposed."""
 
 from dataclasses import replace
+import asyncio
 import time
 
 from openframetap.devices.pocket3_normal import build_normal_frame, validate_normal_frame, registration_reply
@@ -18,11 +19,18 @@ class NormalUdpTransport(DjiWifiUdpTransport):
         self.registration_keys = set()
         self.session_open_sent = False
         self.last_presence_time = None
+        self._serial_send = asyncio.Lock()
+
+    async def send_flow_ack_if_due(self):
+        async with self._serial_send:
+            return await super().send_flow_ack_if_due()
 
     async def _send_profile_frame(self, raw, name):
         if self.sequencer is None:
             raise RuntimeError('normal UDP session is not handshaken')
-        async with self._writer_lock:
+        async with self._serial_send, self._writer_lock:
+            if callable(raw):
+                raw = raw()  # Allocate the DUML sequence only while owning the writer.
             envelope = self.sequencer.build(raw)
             await self._sendto(envelope.encode())
             self.last_sent_transport_sequence = envelope.transport_sequence
@@ -34,7 +42,7 @@ class NormalUdpTransport(DjiWifiUdpTransport):
         if self.session_open_sent:
             raise RuntimeError('application open already sent')
         self.session_open_sent = True
-        await self._send_profile_frame(build_normal_frame('normal_session_open',
+        await self._send_profile_frame(lambda: build_normal_frame('normal_session_open',
             wifi_duml_wire_sequence(self.duml_sequence)), 'normal_udp_session_open')
         await self.presence()
 
@@ -43,7 +51,7 @@ class NormalUdpTransport(DjiWifiUdpTransport):
         if self.last_presence_time is not None and now-self.last_presence_time < 1:
             return
         self.last_presence_time = now
-        await self._send_profile_frame(build_normal_frame('normal_app_presence',
+        await self._send_profile_frame(lambda: build_normal_frame('normal_app_presence',
             wifi_duml_wire_sequence(self.duml_sequence)), 'normal_app_presence')
 
     async def answer_registration(self, frame):
@@ -66,7 +74,7 @@ class NormalUdpTransport(DjiWifiUdpTransport):
     async def enable_once(self):
         if self.enable_count or self.sequencer is None:
             raise RuntimeError('normal-view enable requires handshake and can run only once')
-        async with self._writer_lock:
+        async with self._serial_send, self._writer_lock:
             raw = build_normal_frame('normal_live_enable', wifi_duml_wire_sequence(self.duml_sequence))
             validate_normal_frame('normal_live_enable', decode_duml_frame(raw))
             envelope = self.sequencer.build(raw)
@@ -97,3 +105,15 @@ class NormalUdpTransport(DjiWifiUdpTransport):
             self.latest_flow_status = replace(status, range_1=observed(2, status.range_1),
                                               range_2=observed(3, status.range_2))
         return record
+
+
+class NormalControlUdpTransport(NormalUdpTransport):
+    """GUI-only capability: reuse the captured Pocket 3 controller on this socket."""
+
+    async def send_stick(self, command, *, reason):
+        async with self._serial_send:
+            return await DjiWifiUdpTransport.send_stick(self, command, reason=reason)
+
+    async def send_control_keepalive(self):
+        async with self._serial_send:
+            return await DjiWifiUdpTransport.send_control_keepalive(self)

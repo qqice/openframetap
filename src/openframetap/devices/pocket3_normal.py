@@ -8,6 +8,9 @@ from openframetap.protocol.duml import decode_duml_frame, encode_duml_frame
 SOURCE = "Mimo Pocket 3 PCAP SHA256 8e7c7eb62acd32429bd0d176e3da2b7d1f688854a3ee79c4017eb631139a181c"
 # Literal payloads below are field-labelled protocol defaults, not complete frames.
 NORMAL_FIELDS = {
+    # Reverse of the already validated 02/8E start: operation 2=stop RTMP.
+    # djictl GetMessagePayloadStopLiveStream and node-osmo DjiStopStreamingMessagePayload agree.
+    "normal_stop_livestream": (0x08, 0x02, 0x8E, bytes((1,1,0x1A,0,1,2))),
     "normal_session_open": (0xF0, 0x00, 0x2B, bytes((4, 0))),
     "normal_session_keepalive": (0xF0, 0x00, 0x2B, bytes((1, 1))),
     "normal_get_ssid": (0x07, 0x07, 0x07, b""),

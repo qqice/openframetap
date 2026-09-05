@@ -28,7 +28,9 @@ def test_normal_profile_uses_pocket3_captured_receiver_and_no_camera_writes():
         validate_command_frame(definition, frame)
         with pytest.raises(CommandRejected):
             validate_command_frame(definition, replace(frame, payload=frame.payload+b'\0'))
-    assert all(c.cmd_set not in (2,4) for c in NORMAL_COMMANDS.values())
+    assert all(c.cmd_set not in (2,4) for name,c in NORMAL_COMMANDS.items() if name!='normal_stop_livestream')
+    stop=decode_duml_frame(build_normal_frame('normal_stop_livestream',1))
+    assert (stop.receiver,stop.cmd_set,stop.cmd_id,stop.payload.hex())==(8,2,0x8E,'01011a000102')
 
 
 @pytest.mark.parametrize('payload', [b'', b'\0', b'\xe0', b'\0\x05abc', b'\0\x08bad\npass'])

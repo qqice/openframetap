@@ -8,6 +8,9 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class AppStateSnapshot:
+    session_mode: str = "livestream"
+    connection_stage: str = "starting"
+    normal_video_online: bool = False
     device_name: str = "Pocket 3"
     ble_connected: bool = False
     pairing_state: str = "confirmed_previous_evidence"
@@ -69,4 +72,3 @@ class StateStore:
     def changed_since(self, revision: int) -> tuple[int, AppStateSnapshot] | None:
         current, value = self.snapshot()
         return None if current == revision else (current, value)
-

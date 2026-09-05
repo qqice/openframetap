@@ -61,6 +61,7 @@ class LiveWifiControlSession:
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._done = threading.Event()
+        self.rearm_requested = threading.Event()
         self._latest = ControlInput(source="live")
         self._minimum_offset = int(minimum_offset)
         self._maximum_offset = int(maximum_offset)
@@ -109,6 +110,24 @@ class LiveWifiControlSession:
     def submit(self, value: ControlInput) -> None:
         self._inputs.put(value)
 
+    def reset_rearm_input(self):
+        while True:
+            try:
+                self._inputs.get_nowait()
+            except queue.Empty:
+                break
+        self._latest = ControlInput(source='rearm')
+        self._stop.clear()
+        self._ready.clear()
+
+    def rearm(self):
+        if self.snapshot()['state'] != 'disabled':
+            return
+        if self._thread and self._thread.is_alive():
+            return
+        self.reset_rearm_input()
+        self.start()
+
     def stop(self, reason: str = "app_stop", timeout: float = 5.0) -> None:
         self._inputs.put(
             ControlInput(emergency_stop=True, exit_requested=True, source=reason, monotonic_ns=time.monotonic_ns())
@@ -136,10 +155,11 @@ class LiveWifiControlSession:
         finally:
             self._done.set()
 
-    async def _run(self) -> None:
-        target_ip = discover_rtmp_publisher_ip()
+    async def _run(self, *, attached_transport=None, attached_ready=None) -> None:
+        attached = attached_transport is not None
+        target_ip = attached_transport.target_ip if attached else discover_rtmp_publisher_ip()
         self._set(target_ip=target_ip, state="connecting")
-        transport = self.transport_factory(
+        transport = attached_transport or self.transport_factory(
             target_ip,
             local_port=54232,
             event_handler=self.datagram_handler,
@@ -191,9 +211,12 @@ class LiveWifiControlSession:
                 if time.monotonic() >= deadline:
                     raise RuntimeError("BLE telemetry was not connected before live control")
                 await asyncio.sleep(0.05)
-            await transport.open()
-            receiver = asyncio.create_task(receive(), name="live-wifi-telemetry")
-            await asyncio.wait_for(udp_ready.wait(), timeout=1.0)
+            if attached:
+                await asyncio.wait_for(attached_ready.wait(), timeout=3.0)
+            else:
+                await transport.open()
+                receiver = asyncio.create_task(receive(), name="live-wifi-telemetry")
+                await asyncio.wait_for(udp_ready.wait(), timeout=1.0)
             await controller.start_watchdog()
 
             async def send_verified_keepalive(*, initial: bool = False) -> None:
@@ -220,7 +243,7 @@ class LiveWifiControlSession:
                 current_protocol_offset=0,
                 last_center_ns=controller.last_center_ns,
             )
-            self._event("live_control_armed", target_ip=target_ip, local_port=54232)
+            self._event("live_control_armed", target_ip=target_ip, local_port=transport.local_port)
 
             while not self._stop.is_set():
                 priority_stop: ControlInput | None = None
@@ -248,7 +271,7 @@ class LiveWifiControlSession:
                     )
                     self._stop.set()
                     break
-                if now - last_publisher_check_ns >= 1_000_000_000:
+                if not attached and now - last_publisher_check_ns >= 1_000_000_000:
                     # The application's own rtmpsrc connection also appears
                     # as a peer of MediaMTX's :1935 listener.  Keep the
                     # initially locked Pocket address and verify membership;
@@ -264,7 +287,7 @@ class LiveWifiControlSession:
                 if now - last_keepalive_send_ns >= 1_000_000_000:
                     await send_verified_keepalive()
                     last_keepalive_send_ns = time.monotonic_ns()
-                flow_ack = await transport.send_flow_ack_if_due()
+                flow_ack = None if attached else await transport.send_flow_ack_if_due()
                 if flow_ack is not None:
                     self._set(flow_ack_sent_count=transport.flow_ack_sent_count)
                 last_response_ns = transport.last_keepalive_response_ns
@@ -345,9 +368,12 @@ class LiveWifiControlSession:
                     await receiver
                 except BaseException:
                     pass
-            await transport.close()
+            if not attached:
+                await transport.close()
             self._set(
                 center_packets=controller.center_packets,
                 non_center_packets=controller.non_center_packets,
                 last_center_ns=controller.last_center_ns,
             )
+            if controller.state == WifiGimbalState.DISABLED:
+                self._set(state='disabled', yaw=0., pitch=0., current_protocol_offset=0)

@@ -125,10 +125,13 @@ async def run_prepare_recovery_session(
     start_proposal_path: Path | None = None,
     response_timeout: float = 15.0,
     passive_seconds: float = 10.0,
+    wifi_response_timeout: float | None = None,
     transport_factory: Callable = BluezBleTransport,
 ) -> tuple[dict, bool]:
     if response_timeout <= 0 or passive_seconds < 0:
         raise ValueError("response_timeout must be positive and passive_seconds non-negative")
+    if wifi_response_timeout is not None and wifi_response_timeout <= 0:
+        raise ValueError('Wi-Fi response timeout must be positive')
     _, stages = load_prepare_recovery_proposal(
         proposal_path, expected_address=address
     )
@@ -396,7 +399,8 @@ async def run_prepare_recovery_session(
                 else:
                     result = "wifi_retry_written_after_validated_prepare"
                     recovery_event("wifi_retry_written_after_validated_prepare")
-                    response3 = await observe_wifi_response(passive_seconds)
+                    response3 = await observe_wifi_response(
+                        passive_seconds if wifi_response_timeout is None else wifi_response_timeout)
                     if response3 is not None:
                         wifi_response = response3.to_dict()
                         recovery_event(

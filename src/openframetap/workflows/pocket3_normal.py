@@ -75,7 +75,7 @@ class BleNormalSession:
             finally:
                 self.pending.pop(key, None)
 
-    async def credentials(self):
+    async def credentials(self, *, leave_livestream=False):
         await self.transport.connect()
         await self.transport.acquire_mtu()
         await self.transport.subscribe(self.notification)
@@ -83,6 +83,11 @@ class BleNormalSession:
         status = await self.send('set_pairing_pin')
         if status != b'\x00\x01':
             raise RuntimeError('Pocket did not report already_paired; camera confirmation is required')
+        if leave_livestream:
+            stopped = await self.send('normal_stop_livestream', timeout=15)
+            if stopped != b'\0':
+                raise RuntimeError('Pocket did not confirm RTMP stop before SoftAP switch')
+            self.event(dict(kind='normal_livestream_stopped', response='00'))
         # Pocket 3's 53/10 is E0 in Osmosis; its AP comes up via 00/2B.
         await asyncio.sleep(0.6)
         ssid = parse_wifi_string(await self.send('normal_get_ssid'))
@@ -96,7 +101,9 @@ class BleNormalSession:
             await asyncio.sleep(1)
 
 
-async def run_normal_session(address: str, *, seconds: int, output: Path, display=True):
+async def run_normal_session(address: str, *, seconds: int, output: Path, display=True,
+                             managed=False, player_override=None, state_store=None,
+                             control_session=None, stop_event=None, leave_livestream=False):
     if not 1 <= seconds <= 3600:
         raise ValueError('normal-mode duration must be 1..3600 seconds')
     output = require_private_directory(output)
@@ -118,10 +125,14 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         log.write(json.dumps({'wall_time_utc': datetime.now(timezone.utc).isoformat(),
                               'monotonic_ns': time.monotonic_ns(), **payload}) + '\n')
         log.flush()
+        if control_session and payload.get('kind') in ('stick_center','stick_non_center','control_keepalive'):
+            control_session.datagram_handler(payload)
+        if state_store and payload.get('event') in ('disconnected_callback','disconnect_complete'):
+            state_store.update(ble_connected=False)
     ble = BleNormalSession(address, event)
     network = TemporarySoftAP(runtime / 'normal-network.json')
     udp = None
-    player = NormalVideoPlayer() if display else None
+    player = player_override if player_override is not None else (NormalVideoPlayer() if display else None)
     assembler = OnlineMediaAssembler()
     tasks = []
     captures = []
@@ -136,11 +147,13 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
     stage = 'preflight'
     current = asyncio.current_task()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, current.cancel)
+    if not managed:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, current.cancel)
     try:
         from openframetap.video.player_process import ProcessRegistry
-        if ProcessRegistry(Path('runtime/media-processes.json')).load():
+        owners = ProcessRegistry(Path('runtime/media-processes.json')).load()
+        if any(not (managed and name == 'app' and p.pid == os.getpid()) for name,p in owners.items()):
             raise RuntimeError('stop the existing OpenFrameTap app/preview before normal mode')
         await network.preflight()
         # Bounded root captures are children of a new, specifically owned process group.
@@ -159,7 +172,9 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
             raise RuntimeError('required private btmon/tcpdump capture could not start')
         stage = 'ble_credentials'
         print('Normal mode: reading Pocket 3 hotspot credentials over BLE.', flush=True)
-        credentials = await ble.credentials()
+        credentials = await ble.credentials(leave_livestream=leave_livestream)
+        if state_store:
+            state_store.update(ble_connected=True, pairing_state='already_paired', connection_stage='joining_hotspot')
         tasks.append(asyncio.create_task(ble.heartbeat()))
         stage = 'hotspot_join'
         print('Normal mode: joining temporary hotspot profile on wlan0.', flush=True)
@@ -167,8 +182,12 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         del credentials
         summary['hotspot_connected'] = True
         summary['local_ip'] = local_ip
+        if state_store:
+            state_store.update(connection_stage='udp_handshake')
         stage = 'udp_handshake'
-        udp = NormalUdpTransport(local_ip, event_handler=event)
+        from openframetap.transport.normal_udp import NormalControlUdpTransport
+        transport_class = NormalControlUdpTransport if control_session else NormalUdpTransport
+        udp = transport_class(local_ip, event_handler=event)
         await udp.open(handshake_timeout=3)
         summary['local_udp_port'] = udp.local_port
         print('Normal mode: UDP handshake complete; 40 Hz ACK active.', flush=True)
@@ -176,6 +195,7 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
             player.start()
         counts = Counter()
         registered = asyncio.Event()
+        control_ready = asyncio.Event()
         video_file = (output / 'video.h264').open('wb')
         async def receive():
             try:
@@ -183,6 +203,11 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
                     record = await udp.receive_datagram()
                     kind = record.data[6]
                     counts[f'{kind:02X}'] += 1
+                    if control_session:
+                        control_session._set(local_port=udp.local_port,
+                            flow_ack_sent_count=udp.flow_ack_sent_count,
+                            keepalive_sent_count=udp.keepalive_sent_count,
+                            keepalive_response_count=udp.keepalive_response_count)
                     if kind == 2:
                         unit = assembler.feed(record.data, time.monotonic())
                         if unit:
@@ -196,6 +221,11 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
                         for item in parser.feed(record.data) + parser.finish():
                             if item.frame:
                                 frame = item.frame
+                                if state_store:
+                                    from openframetap.app.normal_session import update_telemetry
+                                    update_telemetry(state_store, frame, time.monotonic_ns())
+                                if frame.cmd_set == 4:
+                                    control_ready.set()
                                 if (frame.sender == 0x48 and frame.receiver == 2 and frame.cmd_set == 0
                                         and frame.cmd_id in (0x81,0x82) and frame.flags == 0x40):
                                     await udp.answer_registration(frame)
@@ -220,6 +250,19 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         await udp.open_application()
         await asyncio.wait_for(registered.wait(), 5)
         await udp.enable_once()
+        if state_store:
+            state_store.update(connection_stage='connected')
+        control_task = None
+        if control_session:
+            async def control_worker():
+                try:
+                    await control_session._run(attached_transport=udp, attached_ready=control_ready)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    control_session._set(state='fault', fault=str(exc), yaw=0., pitch=0.)
+                    event(dict(kind='normal_control_fault', error=str(exc)))
+            control_task = asyncio.create_task(control_worker())
         stage = 'monitoring'
         deadline = time.monotonic() + seconds
         listening_started = time.monotonic()
@@ -227,6 +270,13 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         screenshot_done = False
         first_picture_deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
+            if stop_event and stop_event.is_set():
+                break
+            if control_session and control_session.rearm_requested.is_set():
+                control_session.rearm_requested.clear()
+                if control_task.done() and control_session.snapshot()['state']=='disabled':
+                    control_session.reset_rearm_input()
+                    control_task = asyncio.create_task(control_worker())
             for task in tasks:
                 if task.done():
                     task.result()
@@ -236,7 +286,7 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
                 if player.stats['rendered_frames'] and first_picture is None:
                     first_picture = time.monotonic()
                     summary['first_picture_seconds'] = first_picture-listening_started
-                if first_picture and time.monotonic()-first_picture > 3 and not screenshot_done:
+                if not managed and first_picture and time.monotonic()-first_picture > 3 and not screenshot_done:
                     screenshot_done = True
                     async def screenshot():
                         try:
@@ -253,12 +303,17 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         summary['listening_seconds'] = time.monotonic()-listening_started
         summary['success'] = bool(assembler.stats['access_units'] and (not player or player.stats['rendered_frames']))
     except asyncio.CancelledError:
-        summary['error'] = 'cancelled_by_user_or_parent'
+        summary['error'] = None if stop_event and stop_event.is_set() else 'cancelled_by_user_or_parent'
     except Exception as exc:
         # Exceptions from parsers/network helpers never include the credential value.
         summary['error'] = f'{type(exc).__name__}: {exc}'
     finally:
         summary['last_stage'] = stage
+        # Center control before stopping the receiver, BLE, socket or network.
+        if 'control_task' in locals() and control_task:
+            control_task.cancel()
+            await asyncio.gather(control_task, return_exceptions=True)
+            summary['control'] = control_session.snapshot()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -317,6 +372,7 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
                             digest.update(chunk)
                     manifest.write(f'{digest.hexdigest()}  {p.name}\n')
         lock.close()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.remove_signal_handler(sig)
+        if not managed:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.remove_signal_handler(sig)
     return summary
