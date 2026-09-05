@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -33,18 +34,9 @@ def _sha256(path: Path) -> str:
 def annex_b_nal_types(data: bytes) -> list[int]:
     """Return NAL unit types from a byte-stream without decoding the payload."""
 
-    starts: list[int] = []
-    cursor = 0
-    while cursor + 3 < len(data):
-        if data[cursor : cursor + 4] == b"\x00\x00\x00\x01":
-            starts.append(cursor + 4)
-            cursor += 4
-        elif data[cursor : cursor + 3] == b"\x00\x00\x01":
-            starts.append(cursor + 3)
-            cursor += 3
-        else:
-            cursor += 1
-    return [data[start] & 0x1F for start in starts if start < len(data)]
+    # C-level scan keeps compressed-payload traversal off the Python per-byte
+    # path; critical when the same helper runs beside the 40 Hz UDP ACK task.
+    return [match[1][0] & 0x1F for match in re.finditer(b'\x00\x00\x01(.)', data, re.DOTALL)]
 
 
 @dataclass(frozen=True, slots=True)

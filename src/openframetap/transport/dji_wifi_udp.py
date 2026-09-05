@@ -201,6 +201,7 @@ class DjiWifiUdpTransport:
         *,
         target_port: int = DJI_WIFI_TARGET_PORT,
         local_port: int = DEFAULT_LOCAL_PORT,
+        local_ip: str = "0.0.0.0",
         handshake_profile: DjiWifiHandshakeProfile | None = None,
         socket_factory: Callable[..., socket.socket] = socket.socket,
         event_handler: Callable[[dict], None] | None = None,
@@ -209,8 +210,9 @@ class DjiWifiUdpTransport:
         self.target_ip = validate_pocket_target_ip(target_ip)
         if target_port != DJI_WIFI_TARGET_PORT:
             raise ValueError("DJI Wi-Fi gimbal target port is fixed at 9004")
-        if not 1 <= local_port <= 65535:
-            raise ValueError("local UDP port outside 1..65535")
+        if not 0 <= local_port <= 65535:
+            raise ValueError("local UDP port outside 0..65535")
+        self.local_ip = str(ipaddress.IPv4Address(local_ip))
         self.target_port = target_port
         self.local_port = local_port
         self.handshake_profile = handshake_profile or DjiWifiHandshakeProfile.fresh()
@@ -259,7 +261,9 @@ class DjiWifiUdpTransport:
         sock = self.socket_factory(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.setblocking(False)
-            sock.bind(("0.0.0.0", self.local_port))
+            sock.bind((self.local_ip, self.local_port))
+            if self.local_port == 0:
+                self.local_port = sock.getsockname()[1]
             self.socket = sock
             request = self.handshake_profile.encode()
             await self._sendto(request)

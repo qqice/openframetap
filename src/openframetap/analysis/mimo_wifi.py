@@ -21,6 +21,7 @@ from openframetap.protocol.dji_wifi import (
 
 
 DLT_RAW = 101
+DLT_EN10MB = 1
 DLT_LINUX_SLL2 = 276
 _PCAP_MAGICS = {
     b"\xd4\xc3\xb2\xa1": ("<", 1_000_000),
@@ -66,7 +67,7 @@ def _read_udp(path: Path) -> tuple[list[UdpDatagram], dict]:
         _magic, major, minor, _zone, _sigfigs, _snaplen, link_type = struct.unpack(
             endian + "IHHIIII", header
         )
-        if (major, minor) != (2, 4) or link_type not in {DLT_RAW, DLT_LINUX_SLL2}:
+        if (major, minor) != (2, 4) or link_type not in {DLT_RAW, DLT_LINUX_SLL2, DLT_EN10MB}:
             raise ValueError(f"unsupported PCAP version/link type: {major}.{minor}/{link_type}")
         while record_header := stream.read(16):
             if len(record_header) != 16:
@@ -84,12 +85,25 @@ def _read_udp(path: Path) -> tuple[list[UdpDatagram], dict]:
             last = timestamp if last is None else max(last, timestamp)
             index = packet_count
             packet_count += 1
+            if link_type == DLT_EN10MB:
+                if len(packet) < 14:
+                    continue
+                ethertype = int.from_bytes(packet[12:14], 'big')
+                offset = 14
+                while ethertype in (0x8100, 0x88A8) and offset + 4 <= len(packet):
+                    ethertype = int.from_bytes(packet[offset+2:offset+4], 'big')
+                    offset += 4
+                if ethertype != 0x0800:
+                    continue
+                packet = packet[offset:]
             if link_type == DLT_LINUX_SLL2:
                 if len(packet) < 20 or packet[0:2] != b"\x08\x00":
                     continue
                 packet = packet[20:]
             if len(packet) < 28 or packet[0] >> 4 != 4:
                 continue
+            if int.from_bytes(packet[6:8], 'big') & 0x3FFF:
+                continue  # IP fragment reassembly is outside this UDP reader.
             ihl = (packet[0] & 0x0F) * 4
             if ihl < 20 or len(packet) < ihl + 8 or packet[9] != 17:
                 continue

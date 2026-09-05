@@ -302,6 +302,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     pocket3 = subcommands.add_parser("pocket3", help="Pocket 3 application-layer operations")
     pocket3_commands = pocket3.add_subparsers(dest="pocket3_command", required=True)
+    normal = pocket3_commands.add_parser("normal", help="temporary Pocket SoftAP with UDP normal view")
+    normal.add_argument("--address", default=os.environ.get("POCKET3_BLE_ADDRESS", POCKET3_PROFILE.default_address))
+    normal.add_argument("--seconds", type=int, default=120)
+    normal.add_argument("--output", type=Path, required=True)
+    normal.add_argument("--no-display", action="store_true")
     pair = pocket3_commands.add_parser("pair", help="DJI application-layer pairing")
     pair_commands = pair.add_subparsers(dest="pair_command", required=True)
     pair_status = pair_commands.add_parser(
@@ -552,6 +557,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "pocket3" and args.pocket3_command == "normal":
+        from openframetap.workflows.pocket3_normal import run_normal_session
+        try:
+            result = asyncio.run(run_normal_session(args.address, seconds=args.seconds,
+                                output=args.output, display=not args.no_display))
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"NORMAL_MODE_FAILED: {exc}")
+            return 1
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("success") and not result.get("error") and result.get("network_restored") else 1
     if args.command == "control" and args.control_command == "mock-test":
         from openframetap.control.mock_validation import run_mock_validation
 

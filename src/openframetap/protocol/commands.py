@@ -238,6 +238,10 @@ def validate_command_frame(command: CommandDefinition, frame) -> None:
 
     if frame.encryption != 0:
         raise CommandRejected("encrypted command candidates are not allowed in this phase")
+    if command.name.startswith("normal_"):
+        from openframetap.devices.pocket3_normal import validate_normal_frame
+        validate_normal_frame(command.name, frame)
+        return
     if command.ack_required != bool(frame.flags & 0x40):
         raise CommandRejected(f"{command.name} ACK flag does not match its definition")
     if command.name == "set_pairing_pin":
