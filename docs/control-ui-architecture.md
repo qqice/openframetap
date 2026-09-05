@@ -122,6 +122,18 @@ This avoids an unnecessary new camera handshake when video is already running.
 - Earlier live-window reuse caused a Wayland client protocol error; the final
   implementation uses the covering-window approach described above. Its owned
   capture processes were stopped and temporary WLAN state restored.
-- A later full wireless retry could not discover Pocket 3 over BLE (BlueZ itself
-  remained powered). Final-version full wireless round-trip validation therefore
-  remains pending device availability; replay evidence is not claimed as that proof.
+- An intermediate full wireless retry could not discover Pocket over BLE. BlueZ
+  retained an orphan connected device after the failed process; with no app
+  running, disconnecting only that device restored discovery. No pairing records,
+  Bluetooth service or kernel configuration were reset.
+
+Final physical repeat `control-session-gui-final-cycle-20260906-0300` passed
+**livestream → normal → livestream → exit** on the final code (`f35ebd8`).
+The shared transition cover stayed alive and recorded 604 progress updates.
+Encoded-video bitrate means, including startup samples, were 4.28 / 1.38 / 3.37
+Mbps. Each mode passed STOP/re-arm without non-center commands. Final camera RTMP
+stop was explicitly acknowledged (`00`), and no RTMP connection remained after
+exit. All 54 evidence files passed SHA-256 verification on ROCK 4D and were copied
+back to Windows. The app, temporary WLAN profile and capture processes were gone;
+the wired default route and previous WLAN were preserved. This physical result
+closes the previously pending wireless validation.
