@@ -82,3 +82,49 @@ received no video: it omitted APP registration while Pocket repeatedly requested
 run received 7,995 media packets / 917 complete units and rendered 889 frames with
 MPP. One enable was sent. Network rollback succeeded. This establishes the full
 connection path; final scheduling and cleanup verification is recorded below.
+
+## Final physical validation, 2026-09-06
+
+Implementation commits: `bc7ac0d` (normal-mode connection/stream), `4ffea88`
+(remote execution policy and wrappers). Final session:
+`artifacts/private/normal-session-20260905T162212Z` (UTC directory stamp).
+The matching source-tree SHA-256 is stored in its summary.
+
+【实机事实】ROCK 4D successfully read credentials, joined the camera SoftAP,
+acquired DHCP, completed an ephemeral-port UDP handshake and APP registration,
+and received `09/A8` success payload `00`. Exactly one enable was sent.
+
+| Measurement | Result |
+|---|---:|
+| Video listening interval | 30.087 s |
+| Full lifecycle including association and rollback | 46.323 s |
+| Media packets | 10,443 |
+| Reassembled access units | 926 |
+| Rendered frames (explicit MPP, fullscreen Wayland) | 899 |
+| Sink-reported dropped frames | 5 |
+| Expired incomplete media assemblies | 7 |
+| ACK packets | 1,170 |
+| PCAP-measured mean ACK frequency | 38.293 Hz (40 Hz target) |
+| Median / maximum ACK interval | 25.907 / 32.725 ms |
+
+【统计观察】The measured display rate is about 29.9 fps. The scheduler targets
+25 ms without busy-spinning; measured ACK cadence is slightly slower. This is
+a short functional test, not a long-duration reliability or latency benchmark.
+The `first_picture_seconds` field starts after registration and enable; it is
+not full connection startup time or glass-to-glass latency.
+
+【实机事实】Outgoing BLE: session open 1, existing-pairing check 1, SSID GET 1,
+password GET 1, session heartbeat 36. Outgoing UDP DUML: session open 1, APP
+presence 31, `00/81` responses 31, `00/82` responses 31, native enable 1.
+No motion, shooting, recording-format or RTMP provisioning command was sent.
+
+【实机事实】Remote suite: **304 passed, 1 skipped** (optional NumPy absent).
+All eight final-session evidence files passed SHA-256 verification on ROCK 4D
+and were pulled to Windows. Screenshot confirms the recovered live camera view.
+The previous WLAN and wired default route were restored. No temporary
+NetworkManager profile, password file, network rollback state or owned
+btmon/tcpdump/normal-session process remained. No packages were installed.
+
+Current product boundary: `normal-preview` is a standalone bounded fullscreen
+preview. The existing RTMP/control GUI is preserved; a GUI mode selector and
+normal-mode joystick integration are not part of this connection milestone.
