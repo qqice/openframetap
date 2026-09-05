@@ -1,11 +1,20 @@
-# Execution location
+# Execution location — owner-requested handoff, 2026-09-06
 
-The Windows checkout is the sole source of truth for editing and Git.
-Do not execute pytest, tests, builds, media decoding, or analysis jobs on Windows.
-The owner observed a correlation between local pytest and desktop-client crashes.
-Deploy and execute these jobs on ROCK 4D through `scripts/remote.sh`; archive the
-results locally. Read-only file inspection and Git operations stay local.
-Use `./scripts/remote.sh remote-test` for the project test suite.
+After `runtime/board-canonical` is sealed, the canonical Git checkout and runtime
+are `/home/qqice/Workspace/openframetap` on ROCK 4D. Edit, commit, test, decode and
+analyze there. The Windows checkout is a frozen historical copy, not a deploy
+source. Never overwrite newer board edits from Windows. The old
+`/home/qqice/openframetap-runtime` path is a compatibility symlink, not another
+source tree. See `docs/board-handoff.md` before continuing development.
+
+Native entry points: `./scripts/board-app.sh start`, `stop`, `status`, `test`.
+Desktop launch defaults to normal mode with live joystick control and no time
+limit. `--duration 0` disables continuous packet/video capture and rotates logs;
+use bounded diagnostic sessions when raw captures are needed.
+
+During the one-time migration before that seal, Windows remains the editing/Git
+source and all execution stays on ROCK 4D through `scripts/remote.sh`.
+Do not run tests, builds, media decoding or analysis on Windows.
 
 Preserve the fixed vendor kernel, boot chain, DSI/touch configuration and wired
 management route. Normal-mode Wi-Fi uses only its owned temporary profile and

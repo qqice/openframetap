@@ -1,5 +1,12 @@
 # OpenFrameTap
 
+Current development home: **`/home/qqice/Workspace/openframetap` on ROCK 4D**.
+The Windows copy is archived after the 2026-09-06 migration. Start the normal-mode
+GUI from the **OpenFrameTap** desktop icon or `./scripts/board-app.sh start`;
+it runs until explicit exit. Use `./scripts/board-app.sh test` for native tests.
+Read [the current handoff](docs/board-handoff.md) before continuing development;
+older local/SSH instructions below describe the historical bring-up workflow.
+
 OpenFrameTap is an open-source remote monitoring and control terminal prototype for DJI Osmo Pocket cameras. The current milestone includes a tested DJI DUML codec, passive telemetry, hardware-validated Pocket 3 application pairing, a fixed fail-closed livestream workflow, LAN-only RTMP ingest, RK3576 MPP hardware decoding, and fullscreen preview on the existing DSI display.
 
 The Git repository on the local computer is the only source of truth. Files are deployed through SSH to `~/openframetap-runtime` on the ROCK 4D, while all remote evidence is copied back to ignored local `artifacts/remote/` directories.

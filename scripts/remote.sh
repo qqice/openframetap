@@ -193,6 +193,7 @@ Usage:
   ./scripts/remote.sh app-status
   ./scripts/remote.sh app-pull <app-session-or-control-session-stem>
   ./scripts/remote.sh private-pull <private-evidence-directory-name>
+  ./scripts/remote.sh workspace-upload
   ./scripts/remote.sh app-stop
   ./scripts/remote.sh mock-control-test
   ./scripts/remote.sh pocket3-gimbal-test <yaw|pitch> <positive|negative> 0.05 200
@@ -220,6 +221,20 @@ EOF
 
 action="${1:-}"
 case "$action" in
+  workspace-upload)
+    [[ $# -eq 1 ]] || exit 2
+    destination='/home/qqice/Workspace/openframetap'
+    run_remote workspace-preflight "set -eu; test ! -e '$destination'; mkdir -p '$destination'; chmod 700 '$destination'" || exit $?
+    printf '[openframetap] Full source, Git and artifacts -> %s:%s\n' "$TARGET" "$destination"
+    # Caches and Windows virtualenv are not Linux dependencies. Runtime files
+    # are copied for archival, then the finalizer replaces them with board state.
+    (cd "$ROOT_DIR" && tar --exclude='./.venv' --exclude='./.pytest_cache' \
+        --exclude='*/__pycache__' --exclude='*.pyc' -cf - .) | \
+      "$SSH_BIN" "${SSH_OPTIONS[@]}" "$TARGET" "tar -xf - -C '$destination'"
+    status=$?
+    printf '[openframetap] Workspace upload exit status: %s\n' "$status"
+    exit "$status"
+    ;;
   private-pull)
     [[ $# -eq 2 && "$2" =~ ^[A-Za-z0-9][A-Za-z0-9_-]+$ ]] || exit 2
     pull_dir "artifacts/private/$2" "$ROOT_DIR/artifacts/private"
