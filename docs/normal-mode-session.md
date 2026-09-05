@@ -138,6 +138,11 @@ centers control, closes the current session, restores the temporary WLAN, then
 rebuilds video. Returning to RTMP reuses the previously approved stored proposals.
 STOP preserves video; **启用控制** explicitly re-arms with zero input.
 
+Current UI supersedes that earlier button layout: the next fresh joystick
+gesture re-arms paused control; fault states do not auto-rearm. See
+[touch-camera-actions.md](touch-camera-actions.md) for recenter, flip, focus,
+monitor-format limits, and the latest credential-read timeout observations.
+
 Normal video, APP registration, ACK and gimbal share one ephemeral UDP socket
 and serialized writer. Both modes reuse `LiveWifiControlSession` and
 `GimbalUdpController`; attached control neither looks for RTMP nor opens a second

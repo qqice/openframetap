@@ -137,3 +137,16 @@ exit. All 54 evidence files passed SHA-256 verification on ROCK 4D and were copi
 back to Windows. The app, temporary WLAN profile and capture processes were gone;
 the wired default route and previous WLAN were preserved. This physical result
 closes the previously pending wireless validation.
+
+### Touch camera actions (supersedes button/re-arm UI descriptions above)
+
+See [touch-camera-actions.md](touch-camera-actions.md) for the current interface,
+protocol evidence and monitor-format limits. Enable-control and STOP buttons
+have been removed: a fresh joystick gesture resumes paused control; a fault
+still cannot auto-rearm. Release/cancel stops motion and Space remains an
+emergency stop. Dedicated recenter/180-degree buttons avoid tap-count ambiguity.
+Video taps select focus points. All touch buttons now use dark rounded styling.
+The RTMP format panel offers 480p/720p/1080p through the existing validated
+configuration schema; normal mode does not invent HEVC/MJPEG capabilities.
+Stop cleanup permits one reconnect only for a disappearing BlueZ device before
+any FFF5 write, never a retry of an already-sent camera command.

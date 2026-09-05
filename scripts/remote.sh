@@ -192,6 +192,7 @@ Usage:
   ./scripts/remote.sh app-start-normal [seconds]
   ./scripts/remote.sh app-status
   ./scripts/remote.sh app-pull <app-session-or-control-session-stem>
+  ./scripts/remote.sh private-pull <private-evidence-directory-name>
   ./scripts/remote.sh app-stop
   ./scripts/remote.sh mock-control-test
   ./scripts/remote.sh pocket3-gimbal-test <yaw|pitch> <positive|negative> 0.05 200
@@ -219,6 +220,10 @@ EOF
 
 action="${1:-}"
 case "$action" in
+  private-pull)
+    [[ $# -eq 2 && "$2" =~ ^[A-Za-z0-9][A-Za-z0-9_-]+$ ]] || exit 2
+    pull_dir "artifacts/private/$2" "$ROOT_DIR/artifacts/private"
+    ;;
   app-pull)
     [[ $# -eq 2 && "$2" =~ ^(app-session|control-session)-[A-Za-z0-9_-]+$ ]] || exit 2
     pull_dir "artifacts/private/$2" "$ROOT_DIR/artifacts/private" || exit $?
