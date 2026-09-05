@@ -34,6 +34,7 @@ class BleNormalSession:
         self.stream = DumlStreamReassembler()
         self.counts = Counter()
         self.send_lock = asyncio.Lock()
+        self.livestream_stopped=False
 
     def notification(self, record):
         # Raw credentials, if captured by btmon, stay in its private directory.
@@ -75,7 +76,7 @@ class BleNormalSession:
             finally:
                 self.pending.pop(key, None)
 
-    async def credentials(self, *, leave_livestream=False):
+    async def open_authenticated(self):
         await self.transport.connect()
         await self.transport.acquire_mtu()
         await self.transport.subscribe(self.notification)
@@ -83,11 +84,18 @@ class BleNormalSession:
         status = await self.send('set_pairing_pin')
         if status != b'\x00\x01':
             raise RuntimeError('Pocket did not report already_paired; camera confirmation is required')
+
+    async def stop_livestream(self):
+        stopped = await self.send('normal_stop_livestream', timeout=15)
+        if stopped != b'\0':
+            raise RuntimeError('Pocket did not confirm RTMP stop')
+        self.event(dict(kind='normal_livestream_stopped',response='00'))
+        self.livestream_stopped=True
+
+    async def credentials(self, *, leave_livestream=False):
+        await self.open_authenticated()
         if leave_livestream:
-            stopped = await self.send('normal_stop_livestream', timeout=15)
-            if stopped != b'\0':
-                raise RuntimeError('Pocket did not confirm RTMP stop before SoftAP switch')
-            self.event(dict(kind='normal_livestream_stopped', response='00'))
+            await self.stop_livestream()
         # Pocket 3's 53/10 is E0 in Osmosis; its AP comes up via 00/2B.
         await asyncio.sleep(0.6)
         ssid = parse_wifi_string(await self.send('normal_get_ssid'))
@@ -272,11 +280,6 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         while time.monotonic() < deadline:
             if stop_event and stop_event.is_set():
                 break
-            if control_session and control_session.rearm_requested.is_set():
-                control_session.rearm_requested.clear()
-                if control_task.done() and control_session.snapshot()['state']=='disabled':
-                    control_session.reset_rearm_input()
-                    control_task = asyncio.create_task(control_worker())
             for task in tasks:
                 if task.done():
                     task.result()
@@ -352,6 +355,7 @@ async def run_normal_session(address: str, *, seconds: int, output: Path, displa
         except Exception as exc:
             summary['network_cleanup_error'] = str(exc)
         summary.update(actual_duration_seconds=time.monotonic()-started,
+                       livestream_stopped=ble.livestream_stopped,
                        media=dict(assembler.stats), ble_command_counts=dict(ble.counts),
                        fff5_write_count=ble.transport.fff5_write_count)
         event(dict(kind='session_finished', **summary))

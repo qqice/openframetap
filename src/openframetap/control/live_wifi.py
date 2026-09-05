@@ -124,6 +124,7 @@ class LiveWifiControlSession:
         if self.snapshot()['state'] != 'disabled':
             return
         if self._thread and self._thread.is_alive():
+            self.rearm_requested.set()
             return
         self.reset_rearm_input()
         self.start()
@@ -168,6 +169,7 @@ class LiveWifiControlSession:
         receiver: asyncio.Task | None = None
         udp_ready = asyncio.Event()
         neutral_required = False
+        control_paused = False
         last_publisher_check_ns = 0
 
         async def receive() -> None:
@@ -269,8 +271,11 @@ class LiveWifiControlSession:
                         current_protocol_offset=0,
                         last_center_ns=controller.last_center_ns,
                     )
-                    self._stop.set()
-                    break
+                    if value.exit_requested:
+                        self._stop.set()
+                        break
+                    control_paused=True
+                    self._latest=ControlInput(source='stopped')
                 if not attached and now - last_publisher_check_ns >= 1_000_000_000:
                     # The application's own rtmpsrc connection also appears
                     # as a peer of MediaMTX's :1935 listener.  Keep the
@@ -297,6 +302,16 @@ class LiveWifiControlSession:
                 ):
                     await controller.emergency_stop("control_keepalive_stale")
                     raise TimeoutError("Pocket 04/50 control keepalive stale for 2.5 seconds")
+                if control_paused:
+                    if self.rearm_requested.is_set():
+                        self.rearm_requested.clear()
+                        self.reset_rearm_input()
+                        await controller.arm(WifiControlPrerequisites(*([True]*9)))
+                        control_paused=False
+                        neutral_required=False
+                        self._set(state='armed',watchdog='healthy',last_center_ns=controller.last_center_ns)
+                    await asyncio.sleep(0.02)
+                    continue
                 stale = not value.monotonic_ns or now - value.monotonic_ns > 250_000_000
                 quantized = Pocket3StickCommand.from_radial_axes(
                     yaw_axis=value.yaw,

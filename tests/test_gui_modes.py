@@ -86,6 +86,16 @@ def test_attached_controller_does_not_open_second_socket_or_require_rtmp(monkeyp
         await asyncio.sleep(0.15)
         assert any(not c.is_center for c in transport.commands)
         control.submit(ControlInput(emergency_stop=True,source='mode_switch',monotonic_ns=time.monotonic_ns()))
+        for _ in range(200):
+            if control.snapshot()['state']=='disabled':break
+            await asyncio.sleep(0.01)
+        assert not task.done() and transport.is_open
+        control.rearm_requested.set()
+        for _ in range(200):
+            if control.snapshot()['state']=='armed':break
+            await asyncio.sleep(0.01)
+        assert control.snapshot()['state']=='armed'
+        control.submit(ControlInput(emergency_stop=True,exit_requested=True,source='exit',monotonic_ns=time.monotonic_ns()))
         await asyncio.wait_for(task,3)
         assert transport.commands[-1].is_center
         assert control.snapshot()['state']=='disabled'

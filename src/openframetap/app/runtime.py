@@ -91,6 +91,7 @@ class GtkReadOnlyApp:
         session_mode: str = "livestream",
         artifact_root: Path | None = None,
         leave_livestream: bool = False,
+        window_host=None,
         joystick_config_path: Path = Path("config/control-ui.json"),
         registry_path: Path = Path("runtime/media-processes.json"),
     ) -> None:
@@ -113,6 +114,12 @@ class GtkReadOnlyApp:
         self.session_mode = session_mode
         self.artifact_root = artifact_root or self.private_output
         self.normal_session = None
+        self.window_host=window_host
+        self.window_handlers=[]
+        self.content_shown=False
+        from openframetap.video.bitrate import EncodedBitrate
+        self.video_bitrate=EncodedBitrate()
+        self.video_bitrate_samples=[]
         self.registry = ProcessRegistry(registry_path)
         self.state = StateStore()
         self.state.update(session_mode=session_mode)
@@ -195,6 +202,13 @@ class GtkReadOnlyApp:
         if self.stop_reason != "unknown":
             return
         self.stop_reason = reason
+        self.latest_ui_input=ControlInput(source='shutdown',monotonic_ns=time.monotonic_ns())
+        if self.window_host:
+            if not reason.startswith('mode_switch:'):
+                self.window_host.exit_requested=True
+            if self.joystick_popover:
+                self.joystick_popover.hide()
+            self.window_host.show_transition('正在归零并关闭当前连接…')
         self._event({"kind": "app_stop_requested", "reason": reason})
         if self.control and self.control.state not in {
             ControlState.DISABLED,
@@ -210,7 +224,10 @@ class GtkReadOnlyApp:
                 self._event({"kind": "control_stop_error", "error": str(exc)})
         if self.live_control:
             try:
-                self.live_control.stop(f"app_exit:{reason}")
+                if self.window_host:
+                    self.window_host.wait(lambda:self.live_control.stop(f'app_exit:{reason}'))
+                else:
+                    self.live_control.stop(f"app_exit:{reason}")
             except Exception as exc:
                 self._event({"kind": "live_control_stop_error", "error": str(exc)})
         if self.loop is not None:
@@ -271,8 +288,8 @@ class GtkReadOnlyApp:
         window.set_default_size(1280, 720)
         window.set_decorated(False)
         window.fullscreen()
-        window.connect("delete-event", lambda *_args: (self._request_stop("window_close"), True)[1])
-        window.connect("focus-out-event", self._on_focus_lost)
+        self.window_handlers.append(window.connect("delete-event", lambda *_args: (self._request_stop("window_close"), True)[1]))
+        self.window_handlers.append(window.connect("focus-out-event", self._on_focus_lost))
 
         widget.set_hexpand(True)
         widget.set_vexpand(True)
@@ -296,18 +313,14 @@ class GtkReadOnlyApp:
         controls.set_margin_end(18)
         controls.set_margin_top(8)
         controls.set_margin_bottom(8)
-        selector = Gtk.ComboBoxText()
-        selector.append('livestream', '直播模式')
-        selector.append('normal', '常规模式')
-        selector.set_active_id(self.session_mode)
-        selector.set_size_request(135,48)
         def change_mode(combo):
             mode = combo.get_active_id()
             if mode and mode != self.session_mode:
                 combo.set_sensitive(False)
                 self.state.update(connection_stage='switching')
                 self._request_stop('mode_switch:'+mode)
-        selector.connect('changed',change_mode)
+        from openframetap.app.widgets import binary_mode_switch
+        selector=binary_mode_switch(Gtk,Gdk,self.bindings[3],self.session_mode,change_mode)
         self.mode_selector = selector
         controls.pack_start(selector,False,False,0)
         if self.control_mode in {"mock", "live"}:
@@ -367,6 +380,9 @@ class GtkReadOnlyApp:
         exit_button.connect("clicked", lambda *_args: self._request_stop("exit_button"))
         controls.pack_end(exit_button, False, False, 0)
         root.pack_start(controls, False, False, 0)
+        if self.window_host:
+            self.window_host.mount(root)
+            self.window_host.content_window=window
         window.add(root)
 
         css = Gtk.CssProvider()
@@ -382,15 +398,29 @@ class GtkReadOnlyApp:
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
-        window.connect("key-press-event", self._on_key)
-        window.connect("key-release-event", self._on_key_release)
+        self.window_handlers.append(window.connect("key-press-event", self._on_key))
+        self.window_handlers.append(window.connect("key-release-event", self._on_key_release))
         self.window = window
         self.fps_sink = fps_sink
         self.decoder = decoder
         self.video_sink = video_sink
+        self.bitrate_pad=decoder.get_static_pad('sink')
+        def count_encoded(_pad,info):
+            if info.type & Gst.PadProbeType.BUFFER:
+                buffer=info.get_buffer()
+                if buffer:
+                    self.video_bitrate.record(buffer.get_size())
+            elif info.type & Gst.PadProbeType.BUFFER_LIST:
+                buffers=info.get_buffer_list()
+                if buffers:
+                    for i in range(buffers.length()):
+                        self.video_bitrate.record(buffers.get(i).get_size())
+            return Gst.PadProbeReturn.OK
+        self.bitrate_probe=self.bitrate_pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,count_encoded)
 
     def _on_key(self, _widget, event) -> bool:
-        if hasattr(self, 'mode_selector') and self.mode_selector.has_focus():
+        if (hasattr(self, 'mode_selector') and self.mode_selector.has_focus()
+                and event.keyval in (65361,65363)):
             return False
         name = event.string.lower() if event.string else ""
         key_name = self.bindings[1].keyval_name(event.keyval).lower()
@@ -410,6 +440,8 @@ class GtkReadOnlyApp:
         return True
 
     def _on_focus_lost(self, *_args) -> bool:
+        if self.stop_reason != 'unknown' or (self.window_host and not self.content_shown):
+            return False
         self._event({"kind": "window_focus_lost"})
         if self.keyboard:
             self.keyboard.reset()
@@ -566,6 +598,8 @@ class GtkReadOnlyApp:
         self.labels["age"].set_text(f"state {age_ms:.0f}ms")
 
     def _tick(self) -> bool:
+        if self.stop_reason != 'unknown':
+            return False
         Gtk, _Gdk, Gst, _GLib = self.bindings
         now_ns = time.monotonic_ns()
         if self.control:
@@ -641,6 +675,19 @@ class GtkReadOnlyApp:
                 self._event({"kind": "gstreamer_eos"})
 
         rendered = int(self.fps_sink.get_property("frames-rendered"))
+        if self.window_host and not self.content_shown:
+            if rendered>0 or self.video_bitrate.total_bytes>0:
+                self.window_host.show_content()
+                self.content_shown=True
+                if self.joystick_popover:
+                    self.joystick_popover.show_all()
+                    self.joystick_popover.popup()
+            else:
+                stages={'reading_credentials':'正在读取相机热点信息…','joining_hotspot':'正在连接相机热点…',
+                        'udp_handshake':'正在建立视频连接…','connected':'正在等待第一帧画面…',
+                        'starting':'正在接收直播画面…','fault':'连接失败，请退出后查看日志'}
+                snapshot=self.state.snapshot()[1]
+                self.window_host.detail.set_text(snapshot.media_error or stages.get(snapshot.connection_stage,'正在连接相机…'))
         dropped = int(self.fps_sink.get_property("frames-dropped"))
         current_fps = None
         if self.last_render_sample and now_ns > self.last_render_sample[0]:
@@ -664,14 +711,11 @@ class GtkReadOnlyApp:
             self.last_metric_ns = now_ns
             sample = self.metrics.sample()
             self.metric_samples.append(sample)
-            self.metrics_writer.write(sample.to_dict())
-            bitrate = None
-            if sample.network_rx_bytes is not None and self.last_network:
-                delta_ns = sample.monotonic_ns - self.last_network[0]
-                if delta_ns > 0:
-                    bitrate = (sample.network_rx_bytes - self.last_network[1]) * 8e9 / delta_ns
-            if sample.network_rx_bytes is not None:
-                self.last_network = (sample.monotonic_ns, sample.network_rx_bytes)
+            bitrate = self.video_bitrate.sample(now_ns)
+            if bitrate is not None:
+                self.video_bitrate_samples.append(bitrate)
+            self.metrics_writer.write({**sample.to_dict(),'video_bitrate_bps':bitrate,
+                                      'encoded_video_bytes':self.video_bitrate.total_bytes})
             self.state.update(
                 rock_cpu_percent=sample.cpu_percent,
                 rock_rss_bytes=sample.rss_bytes,
@@ -699,9 +743,11 @@ class GtkReadOnlyApp:
         Gtk, _Gdk, Gst, GLib = self.bindings
         self._build_window(Gtk, _Gdk, Gst)
         self.loop = GLib.MainLoop()
+        if self.window_host:
+            self.window_host.exit_callback=lambda:self._request_stop('exit_button')
         self.metrics = ProcessMetrics(os.getpid())
         self.current_caps = None
-        overview_before = gnome_overview_active(env)
+        overview_before = False if self.window_host else gnome_overview_active(env)
         overview_hidden = False
         registry_item = self.registry.load().get('app')
         if registry_item is None or registry_item.pid != os.getpid():
@@ -751,7 +797,9 @@ class GtkReadOnlyApp:
                 set_gnome_overview_active(False, env)
                 overview_hidden = True
             self.window.show_all()
-            if self.joystick_popover is not None:
+            if self.window_host:
+                self.window_host.window.present()
+            if self.joystick_popover is not None and not self.window_host:
                 self.joystick_popover.show_all()
                 self.joystick_popover.popup()
             result = self.pipeline.set_state(Gst.State.PLAYING)
@@ -796,14 +844,21 @@ class GtkReadOnlyApp:
                         GLib.source_remove(tick_id)
             if self.normal_session:
                 try:
-                    self.normal_session.stop('app_finally')
+                    if self.window_host:
+                        self.window_host.show_transition('正在关闭热点连接并恢复网络…')
+                        self.window_host.wait(lambda:self.normal_session.stop('app_finally'))
+                    else:
+                        self.normal_session.stop('app_finally')
                     if self.normal_session.summary.get('network_cleanup_error'):
                         error = 'normal network rollback incomplete'
                 except Exception as exc:
                     error = error or str(exc)
             if self.live_control:
                 try:
-                    self.live_control.stop("app_finally")
+                    if self.window_host:
+                        self.window_host.wait(lambda:self.live_control.stop('app_finally'))
+                    else:
+                        self.live_control.stop("app_finally")
                 except Exception as exc:
                     error = error or f"live control cleanup failed: {exc}"
             if self.control and self.control.state not in {
@@ -819,17 +874,27 @@ class GtkReadOnlyApp:
                 except Exception as exc:
                     error = error or f"control cleanup failed: {exc}"
             self.pipeline.set_state(Gst.State.NULL)
+            self.bitrate_pad.remove_probe(self.bitrate_probe)
             if self.joystick_popover:
                 self.joystick_popover.destroy()
+            for handler in self.window_handlers:
+                self.window.disconnect(handler)
+            if self.window_host:
+                self.window_host.unmount()
+                self.window_host.exit_callback=None
             self.window.destroy()
             if self.ble:
                 try:
-                    self.ble.stop()
+                    if self.window_host:
+                        self.window_host.wait(self.ble.stop)
+                    else:
+                        self.ble.stop()
                 except Exception as exc:
                     error = error or f"{type(exc).__name__}: {exc}"
             if overview_before:
                 set_gnome_overview_active(True, env)
-            self.registry.unregister("app")
+            if not self.window_host:
+                self.registry.unregister("app")
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
             self.events.close()
@@ -869,6 +934,9 @@ class GtkReadOnlyApp:
                 == "mppvideodec",
             },
             "metrics": summarize_metrics(self.metric_samples),
+            "video_bitrate": {'source':'decoder_sink_encoded_h264',
+                'bytes':self.video_bitrate.total_bytes,
+                'average_bps':sum(self.video_bitrate_samples)/len(self.video_bitrate_samples) if self.video_bitrate_samples else None},
             "screenshot": self.screenshot,
             "cleanup": {
                 "app_registry_empty": "app" not in self.registry.load(),

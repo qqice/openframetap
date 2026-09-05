@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import ipaddress
+import json
 import re
 import secrets
 import socket
@@ -85,6 +86,12 @@ def discover_rtmp_publisher_ip(
     *, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
 ) -> str:
     addresses = list_rtmp_server_peer_ips(runner=runner)
+    # A persistent GUI can start its reader before the control thread runs.
+    # MediaMTX lists that local reader beside the real camera publisher.
+    result = runner(['ip','-j','-4','address','show'],text=True,capture_output=True,check=True,timeout=5)
+    local_addresses = {item['local'] for interface in json.loads(result.stdout)
+                       for item in interface.get('addr_info',[]) if item.get('family')=='inet'}
+    addresses = tuple(address for address in addresses if address not in local_addresses)
     if len(addresses) != 1:
         raise RuntimeError(
             f"expected exactly one current private RTMP publisher, found {len(addresses)}"
@@ -275,10 +282,20 @@ class DjiWifiUdpTransport:
             }
             self.sent_records.append(handshake_record)
             self.event_handler(handshake_record)
-            response, peer = await asyncio.wait_for(self._recvfrom(2048), handshake_timeout)
-            if peer[0] != self.target_ip or peer[1] != self.target_port:
-                raise RuntimeError("handshake response came from an unexpected UDP peer")
-            basic = DjiWifiBasicHeader.parse(response)
+            deadline = asyncio.get_running_loop().time()+handshake_timeout
+            while True:
+                remaining=deadline-asyncio.get_running_loop().time()
+                if remaining<=0:
+                    raise TimeoutError('Pocket UDP handshake response timed out')
+                response, peer = await asyncio.wait_for(self._recvfrom(2048),remaining)
+                if peer[0] != self.target_ip or peer[1] != self.target_port:
+                    raise RuntimeError("handshake response came from an unexpected UDP peer")
+                basic = DjiWifiBasicHeader.parse(response)
+                # Re-arming reuses the local port; late telemetry from the old
+                # session can precede the new handshake ACK. It cannot satisfy it.
+                if basic.session_id != self.handshake_profile.session_id or basic.wh_type != DJI_WIFI_HANDSHAKE:
+                    continue
+                break
             if (
                 not basic.checksum_valid
                 or basic.format_nibble != DJI_WIFI_FORMAT_NIBBLE

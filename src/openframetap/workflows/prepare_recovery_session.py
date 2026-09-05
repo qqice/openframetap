@@ -126,6 +126,7 @@ async def run_prepare_recovery_session(
     response_timeout: float = 15.0,
     passive_seconds: float = 10.0,
     wifi_response_timeout: float | None = None,
+    progress_callback=None,
     transport_factory: Callable = BluezBleTransport,
 ) -> tuple[dict, bool]:
     if response_timeout <= 0 or passive_seconds < 0:
@@ -193,6 +194,8 @@ async def run_prepare_recovery_session(
     frames: asyncio.Queue[DumlFrame] = asyncio.Queue()
 
     def recovery_event(event: str, **fields) -> None:
+        if progress_callback:
+            progress_callback(event)
         payload = _event(event, **fields)
         _jsonl(recovery_events_path, payload)
         print(f"RECOVERY_EVENT: {event} {json.dumps(fields, ensure_ascii=False)}", flush=True)
