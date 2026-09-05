@@ -95,10 +95,14 @@ def test_rsync_deploy_has_required_exclusions(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     fake_rsync.chmod(0o755)
+    fake_ssh=bin_dir/'ssh'
+    fake_ssh.write_text('#!/usr/bin/env bash\nexit 0\n',encoding='utf-8')
+    fake_ssh.chmod(0o755)
     args_file = tmp_path / "args.txt"
     env = os.environ.copy()
     env["PATH"] = f"{shell_path(bin_dir)}:/usr/bin:/bin"
     env["RSYNC_ARGS_FILE"] = shell_path(args_file)
+    env["OPENFRAMETAP_SSH_BIN"] = shell_path(fake_ssh)
     env["ROCK4D_SSH_HOST"] = "fixture@example.invalid"
     result = run_bash("scripts/deploy.sh", env=env)
     assert result.returncode == 0, result.stderr
@@ -117,6 +121,14 @@ def test_rsync_deploy_has_required_exclusions(tmp_path: Path) -> None:
         "*.egg-info/",
     ):
         assert f"--exclude={exclusion}" in args
+
+
+def test_board_authority_guard_refuses_deploy_without_masking_ssh_failures(tmp_path):
+    fake=tmp_path/'sealed-ssh'
+    fake.write_text('#!/usr/bin/env bash\nexit 73\n',encoding='utf-8');fake.chmod(0o755)
+    env=os.environ.copy();env['OPENFRAMETAP_SSH_BIN']=shell_path(fake)
+    result=run_bash('scripts/deploy.sh',env=env)
+    assert result.returncode==73 and 'canonical' in result.stderr
 
 
 def test_scanner_failure_cleans_up_btmon(tmp_path: Path) -> None:

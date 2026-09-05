@@ -46,11 +46,16 @@ printf '[openframetap] SSH target: %s\n' "$TARGET"
 printf '[openframetap] Deploy source: %s\n' "$ROOT_DIR"
 printf '[openframetap] Deploy destination: %s:%s\n' "$TARGET" "$REMOTE_DIR"
 
-"$SSH_BIN" "${SSH_OPTIONS[@]}" "$TARGET" \
-  "test ! -e $REMOTE_DIR/runtime/board-canonical" || {
+if "$SSH_BIN" "${SSH_OPTIONS[@]}" "$TARGET" \
+  "if test -e $REMOTE_DIR/runtime/board-canonical; then exit 73; fi"; then
+  :
+else
+  status=$?
+  if [[ "$status" -eq 73 ]]; then
     echo 'Deployment refused: ROCK 4D is now canonical. Edit/test there; this Windows checkout is an archive.' >&2
-    exit 3
-  }
+  fi
+  exit "$status"
+fi
 
 if command -v rsync >/dev/null 2>&1; then
   rsync -av --delete "${RSYNC_EXCLUDES[@]}" \
